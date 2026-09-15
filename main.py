@@ -679,16 +679,26 @@ if __name__ == "__main__":
         skip_previously_forecasted_questions=True,
         extra_metadata_in_explanation=True,
          llms={
-            "default": GeneralLlm(
-                model="openrouter/openai/gpt-4.1",
-                temperature=0.3,
-                timeout=60,
-                allowed_tries=2,
-            ),
-            "summarizer": "openrouter/openai/gpt-4.1-mini",
-            "researcher": "openrouter/openai/gpt-4.1",
-            "parser": "openrouter/openai/gpt-4.1-mini",
-        },
+    "default": GeneralLlm(
+        model="gpt-5-mini",
+        temperature=0.3,
+        max_tokens=2500,
+        timeout=60,
+        allowed_tries=2,
+    ),
+    "summarizer": GeneralLlm(
+        model="gpt-5-mini",
+        max_tokens=1200,
+    ),
+    "researcher": GeneralLlm(
+        model="gpt-5-mini",
+        max_tokens=2000,
+    ),
+    "parser": GeneralLlm(
+        model="gpt-5-mini",
+        max_tokens=800,
+    ),
+},
     )
 
     # Per-mode tournament URL shown in the summary banner footer. These
