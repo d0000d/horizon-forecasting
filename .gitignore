@@ -171,3 +171,8 @@ cython_debug/
 
 # MacOS
 .DS_Store
+# Horizon runtime state and offline scratch (never commit local ledgers).
+work/
+*.sqlite
+*.sqlite-journal
+__pycache__/

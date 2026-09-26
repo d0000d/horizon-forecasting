@@ -1,3 +1,14 @@
+# Horizon forecasting — development branch
+
+**Experimental v0.2.0-alpha.1:** see [release notes and reproducible setup](RELEASE_NOTES.md).
+Forecast accuracy is unmeasured. The latest real trial abstained for insufficient
+relevant evidence. Publishing this source release does not deploy the bot.
+
+Start with [setup, validation and limitations](RELEASE_NOTES.md).
+The new offline demo is `python -m horizon`; tests are `python -m unittest discover -s tests -v`.
+Council now has its own Metaculus runner through `python main.py`; see [runner setup and verified limitations](RELEASE_NOTES.md). It supports standalone binary questions only. Running without flags performs a local preflight with no API calls.
+The older instructions below describe the upstream template, now selected explicitly with `--legacy-template`. Existing cloud workflows still use that legacy engine and do not deploy Council. Paid execution requires explicit opt-in; publishing has a separate flag.
+
 # Simple Metaculus forecasting bot
 This repository contains a simple bot meant to get you started with creating your own bot for the AI Forecasting Tournament. Go to https://www.metaculus.com/futureeval/participate/ for more info and tournament rules (and then go to the  "Getting Started" section of our [resources](https://www.metaculus.com/notebooks/38928/ai-benchmark-resources/#want-to-join-the-ai-forecasting-benchmark) page).
 

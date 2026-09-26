@@ -1,4 +1,15 @@
 import argparse
+import sys
+
+if __name__ == "__main__" and "--legacy-template" not in sys.argv:
+    from horizon.runner import main as council_main
+    raise SystemExit(council_main())
+if "--legacy-template" in sys.argv:
+    sys.argv.remove("--legacy-template")
+
+if __name__ == "__main__" and "--allow-paid-api" not in sys.argv and "--help" not in sys.argv:
+    raise SystemExit("Paid template execution is disabled. Use python -m horizon for the free demo. After explicit approval, pass --allow-paid-api; publishing also requires --publish.")
+
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -657,14 +668,16 @@ if __name__ == "__main__":
         "--mode",
         type=str,
         choices=["tournament", "metaculus_cup", "test_questions"],
-        default="tournament",
-        help="What to forecast on (default: tournament)",
+        default="test_questions",
+        help="What to forecast on (default: test_questions)",
     )
+    parser.add_argument("--allow-paid-api", action="store_true", help="Use only after explicit approval of API spending")
+    parser.add_argument("--publish", action="store_true", help="Use only after explicit approval of Metaculus submissions")
     args = parser.parse_args()
     run_mode: Literal["tournament", "metaculus_cup", "test_questions"] = args.mode
 
     check_environment(strict=True)
-    publish_to_metaculus = True
+    publish_to_metaculus = args.publish
     print_startup_banner(run_mode, will_publish=publish_to_metaculus)
 
     # Configure the bot. The `llms=` block below is commented out to use
@@ -672,7 +685,7 @@ if __name__ == "__main__":
     # uncomment and edit to pin specific models.
     template_bot = SummerTemplateBot2026(
         research_reports_per_question=1,
-        predictions_per_research_report=5,
+        predictions_per_research_report=1,
         use_research_summary_to_forecast=False,
         publish_reports_to_metaculus=publish_to_metaculus,
         folder_to_save_reports_to=None,
