@@ -122,6 +122,37 @@ def update_inventory(posts, seen):
     return new, sorted(set(seen) | {str(p['post_id']) for p in posts})
 
 
+async def notify_github(report):
+    """Public question links only; assign the owner to deliver a GitHub notification."""
+    import httpx
+    repo = os.environ['GITHUB_REPOSITORY']
+    owner = repo.split('/')[0]
+    async with httpx.AsyncClient(base_url='https://api.github.com', timeout=30,
+        headers={'Authorization': 'Bearer '+os.environ['GH_TOKEN'],
+                 'Accept': 'application/vnd.github+json'}) as client:
+        for post in report['new_questions']:
+            ident = post['post_id']
+            title = f'Horizon: novo pitanje #{ident}'
+            # Owner notifications are durable, independently of the Codex app.
+            response = await client.post(f'/repos/{repo}/issues', json={
+                'title': title, 'assignees': [owner],
+                'body': f'Novo pitanje: https://www.metaculus.com/questions/{ident}/\n\n'
+                        + ('Podržano binarno pitanje.' if post['supported'] else 'Ovaj tip pitanja još nije podržan.')
+                        + f'\n\nNačin rada: **{report["mode"]}**. '
+                        + 'Obavijest o pitanju nije potvrda objavljene prognoze.\n\n'
+                        + f'Izvještaj: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'})
+            response.raise_for_status()
+        if report['daily_report']:
+            response = await client.post(f'/repos/{repo}/issues', json={
+                'title': 'Horizon: dnevni izvještaj '+report['checked_at'][:10],
+                'assignees': [owner],
+                'body': f'Način rada: **{report["mode"]}**\n\n'
+                        + f'Otvoreno pitanja: {report["open_posts"]}; podržanih: {report["supported_open"]}.\n\n'
+                        + 'Prepreke: '+(', '.join(report['blocked']) or 'nema prijavljenih u ovoj provjeri')
+                        + f'\n\nDetalji: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'})
+            response.raise_for_status()
+
+
 async def tick(mode, state, output, *, local=False):
     from .budget import Budget
     if not local:
@@ -133,9 +164,12 @@ async def tick(mode, state, output, *, local=False):
     seen = json.loads(seen_path.read_text()) if seen_path.exists() else []
     new, seen = update_inventory(posts, seen)
     seen_path.write_text(json.dumps(seen), encoding='utf-8')
+    old_report = json.loads((state/'report.json').read_text(encoding='utf-8')) if (state/'report.json').exists() else {}
+    today = now().date().isoformat()
     report = {'checked_at': now().isoformat(), 'mode': mode, 'open_posts': len(posts),
               'new_questions': new, 'supported_open': sum(p['supported'] for p in posts),
-              'questions': [], 'blocked': [], 'publishing_enabled': mode == 'publish'}
+              'questions': [], 'blocked': [], 'publishing_enabled': mode == 'publish',
+              'daily_report': old_report.get('last_daily') != today, 'last_daily': today}
     if mode != 'observe':
         report['blocked'] = [key+' missing' for key in
             ('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY') if not os.environ.get(key)]
@@ -154,6 +188,8 @@ async def tick(mode, state, output, *, local=False):
             if run_report.exists():
                 report['questions'] = json.loads(run_report.read_text(encoding='utf-8'))['questions']
     (state/'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    if not local and os.environ.get('HORIZON_NOTIFY') == 'true':
+        await notify_github(report)
     export_state(state, output, os.environ.get('GITHUB_RUN_ID', 'local'))
     summary = ['# Horizon status', f'Checked: {report["checked_at"]}', f'Mode: **{mode}**',
                f'Open posts: {len(posts)}; supported binary posts: {report["supported_open"]}',
