@@ -159,19 +159,26 @@ async def tick(mode, state, output, *, local=False):
         await restore_cloud(state)
     state.mkdir(parents=True, exist_ok=True)
     Budget(state/'budget.sqlite')
-    posts = await inventory()
+    inventory_error = None
+    try:
+        posts = await inventory()
+    except Exception as exc:
+        # No spending has occurred. Preserve state and surface the problem so
+        # transient read failures do not reset the ledger or permanently wedge it.
+        posts = []
+        inventory_error = 'Question inventory failed: '+type(exc).__name__
     seen_path = state/'seen.json'
     seen = json.loads(seen_path.read_text()) if seen_path.exists() else []
     new, seen = update_inventory(posts, seen)
     seen_path.write_text(json.dumps(seen), encoding='utf-8')
     old_report = json.loads((state/'report.json').read_text(encoding='utf-8')) if (state/'report.json').exists() else {}
     today = now().date().isoformat()
-    report = {'checked_at': now().isoformat(), 'mode': mode, 'open_posts': len(posts),
+    report = {'checked_at': now().isoformat(), 'mode': mode, 'open_posts': None if inventory_error else len(posts),
               'new_questions': new, 'supported_open': sum(p['supported'] for p in posts),
-              'questions': [], 'blocked': [], 'publishing_enabled': mode == 'publish',
+              'questions': [], 'blocked': [inventory_error] if inventory_error else [], 'publishing_enabled': mode == 'publish',
               'daily_report': old_report.get('last_daily') != today, 'last_daily': today}
     if mode != 'observe':
-        report['blocked'] = [key+' missing' for key in
+        report['blocked'] += [key+' missing' for key in
             ('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY') if not os.environ.get(key)]
         if not report['blocked']:
             command = [sys.executable, '-m', 'horizon.runner', '--config', 'configs/openrouter.example.json',
