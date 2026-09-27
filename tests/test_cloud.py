@@ -5,8 +5,12 @@ from contextlib import contextmanager
 from uuid import uuid4
 import unittest
 import zipfile
+import asyncio
+import os
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
-from horizon.cloud import export_state, previous_run, restore_zip, update_inventory
+from horizon.cloud import export_state, previous_run, restore_zip, update_inventory, notify_github, tick
 
 
 @contextmanager
@@ -22,6 +26,30 @@ def tempdir():
 
 
 class CloudTests(unittest.TestCase):
+    def test_notice_contains_only_public_link_and_is_assigned_to_owner(self):
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(raise_for_status=lambda: None)
+        report = {'new_questions': [{'post_id': 42, 'supported': True, 'title': 'untrusted @mention'}],
+                  'mode': 'observe', 'daily_report': False}
+        with patch.dict('sys.modules', {'httpx': SimpleNamespace(AsyncClient=Mock(return_value=client))}), \
+             patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_RUN_ID': '7', 'GH_TOKEN': 'fixture'}):
+            asyncio.run(notify_github(report))
+        payload = client.post.call_args.kwargs['json']
+        self.assertEqual(payload['assignees'], ['owner'])
+        self.assertIn('/questions/42/', payload['body'])
+        self.assertNotIn('@mention', payload['body'])
+        self.assertNotIn('fixture', str(payload))
+
+    def test_missing_research_key_blocks_paid_process_and_preserves_state(self):
+        with tempdir() as root, patch.dict(os.environ, {}, clear=True), \
+             patch('horizon.cloud.inventory', AsyncMock(return_value=[])), \
+             patch('horizon.cloud.subprocess.run') as process:
+            report = asyncio.run(tick('publish', root/'state', root/'export', local=True))
+            self.assertIn('ASKNEWS_API_KEY missing', report['blocked'])
+            process.assert_not_called()
+            self.assertTrue((root/'export'/'checkpoint.json').exists())
+
     def test_missing_failed_or_running_predecessor_blocks(self):
         self.assertIsNone(previous_run([], 1))
         for runs in ([], [{'run_number': 1, 'status': 'in_progress', 'conclusion': None}],
