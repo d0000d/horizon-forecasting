@@ -19,8 +19,7 @@ has not been established. This release does not enable autonomous tournament pub
 
 ## Validation and limitations
 
-82 offline tests pass locally on Python 3.12. The release workflow runs the same
-suite on Python 3.11 before publishing. A live-model synthetic fair-coin fixture
+82 offline tests pass locally on Python 3.12. Publication is manual. A live-model synthetic fair-coin fixture
 completed both forecast perspectives and aggregation at 0.5, with status `review`;
 this checks execution, not predictive accuracy or publication eligibility.
 
