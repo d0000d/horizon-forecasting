@@ -14,6 +14,7 @@ concurrency:
 # Daily job to run the simple forecast bot
 jobs:
   forecast_job:
+    if: vars.HORIZON_PAID_RUNS_APPROVED == 'true'
     runs-on: ubuntu-latest # determines the machine that will run the job - keep as is
     steps: # sets up the steps that will be run in order
       # setup repository with all necessary dependencies - keep as is
@@ -39,7 +40,7 @@ jobs:
         run: poetry install --no-interaction --no-root
       - name: Run bot
         run: |
-          poetry run python main.py
+          poetry run python main.py --legacy-template --mode tournament --allow-paid-api
         # this reads the environment variables from the github repository.
         # Store under Settings --> Secrets and variables --> Actions
         env:
