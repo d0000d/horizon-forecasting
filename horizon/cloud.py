@@ -17,6 +17,29 @@ FILES = {'checkpoint.json', 'seen.json', 'report.json', 'budget.sqlite',
 ARTIFACT = 'horizon-operational-state'
 
 
+def validate_bot(identity):
+    if identity.get('id') != 308221 or identity.get('is_bot') is not True:
+        raise ValueError('Metaculus credential does not belong to the Horizon bot')
+
+
+async def verify_connections():
+    import httpx
+    from asknews_sdk import AsyncAskNewsSDK
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+        response = await client.get('https://www.metaculus.com/api/users/me/',
+            headers={'Authorization': 'Token '+os.environ['METACULUS_TOKEN']})
+        response.raise_for_status()
+        validate_bot(response.json())
+        response = await client.get('https://openrouter.ai/api/v1/key',
+            headers={'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']})
+        response.raise_for_status()
+    async with AsyncAskNewsSDK(api_key=os.environ['ASKNEWS_API_KEY'], retries=0,
+        timeout=30, follow_redirects=False) as news:
+        await news.news.search_news(query='Metaculus FutureEval', n_articles=1,
+                                    return_type='both', strategy='latest news')
+    return {'metaculus_bot_id': 308221, 'openrouter': 'authenticated', 'asknews': 'authenticated'}
+
+
 def previous_run(runs, number):
     previous = [r for r in runs if r['run_number'] < number]
     if not previous:
@@ -176,10 +199,18 @@ async def tick(mode, state, output, *, local=False):
     report = {'checked_at': now().isoformat(), 'mode': mode, 'open_posts': None if inventory_error else len(posts),
               'new_questions': new, 'supported_open': sum(p['supported'] for p in posts),
               'questions': [], 'blocked': [inventory_error] if inventory_error else [], 'publishing_enabled': mode == 'publish',
-              'daily_report': old_report.get('last_daily') != today, 'last_daily': today}
+              'daily_report': old_report.get('last_daily') != today, 'last_daily': today,
+              'connections': old_report.get('connections', {}),
+              'connections_checked_date': old_report.get('connections_checked_date')}
     if mode != 'observe':
         report['blocked'] += [key+' missing' for key in
             ('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY') if not os.environ.get(key)]
+        if not report['blocked'] and report['connections_checked_date'] != today:
+            try:
+                report['connections'] = await verify_connections()
+                report['connections_checked_date'] = today
+            except Exception as exc:
+                report['blocked'].append('Service connection check failed: '+type(exc).__name__)
         if not report['blocked']:
             command = [sys.executable, '-m', 'horizon.runner', '--config', 'configs/openrouter.example.json',
                        '--run', '--allow-paid-api', '--tournament', 'fall-futureeval-2026',
@@ -206,6 +237,8 @@ async def tick(mode, state, output, *, local=False):
                 + ('(binary)' if p['supported'] else '(unsupported type)') for p in new]
     summary += ['', '## Processing']+[f'- {q["post_id"]}: {q["status"]}' for q in report['questions']]
     summary += ['', '## Blockers']+['- '+x for x in report['blocked']]
+    summary += ['', '## Connections', json.dumps(report['connections']),
+                'Last verified: '+str(report['connections_checked_date'])]
     summary += ['', 'No forecast probabilities, credentials, research text or model traces are uploaded.']
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('\n\n'.join(summary), encoding='utf-8')
