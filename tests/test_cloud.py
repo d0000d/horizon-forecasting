@@ -10,7 +10,7 @@ import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from horizon.cloud import export_state, previous_run, restore_zip, update_inventory, notify_github, tick
+from horizon.cloud import export_state, previous_run, restore_zip, update_inventory, notify_github, tick, validate_bot
 
 
 @contextmanager
@@ -26,6 +26,13 @@ def tempdir():
 
 
 class CloudTests(unittest.TestCase):
+    def test_only_expected_bot_identity_can_publish(self):
+        validate_bot({'id': 308221, 'is_bot': True})
+        for identity in ({'id': 308220, 'is_bot': False}, {'id': 308221, 'is_bot': False},
+                         {'id': 999, 'is_bot': True}, {}):
+            with self.assertRaises(ValueError):
+                validate_bot(identity)
+
     def test_notice_contains_only_public_link_and_is_assigned_to_owner(self):
         client = AsyncMock()
         client.__aenter__.return_value = client
