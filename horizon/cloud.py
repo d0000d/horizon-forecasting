@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+from datetime import datetime
 import shutil
 import subprocess
 import sys
@@ -174,6 +175,24 @@ async def notify_github(report):
                         + 'Prepreke: '+(', '.join(report['blocked']) or 'nema prijavljenih u ovoj provjeri')
                         + f'\n\nDetalji: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'})
             response.raise_for_status()
+        for result in report.get('new_results', []):
+            ident = int(result['post_id'])
+            response = await client.post(f'/repos/{repo}/issues', json={
+                'title': f'Horizon: ishod obrade #{ident}', 'assignees': [owner],
+                'body': f'https://www.metaculus.com/questions/{ident}/\n\n'
+                    + f'Ishod: **{result["decision"]}**\n\n'
+                    + 'Kodovi razloga: '+(', '.join(result.get('decision_codes', [])) or 'nema')
+                    + '\n\nAbstained znači automatski odustanak; ne čeka tvoje odobrenje.'
+                    + f'\n\nDetalji: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'})
+            response.raise_for_status()
+        if report.get('schedule_delayed') and not report.get('was_schedule_delayed'):
+            response = await client.post(f'/repos/{repo}/issues', json={
+                'title': 'Horizon: raspored kasni', 'assignees': [owner],
+                'body': f'Razmak između provjera: {report["gap_minutes"]} minuta. '
+                    + 'Ciljani raspored je 20 minuta; GitHub ga nije održao. '
+                    + 'Kratko otvorena pitanja mogla su biti propuštena.\n\n'
+                    + f'https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'})
+            response.raise_for_status()
 
 
 async def tick(mode, state, output, *, local=False):
@@ -196,12 +215,15 @@ async def tick(mode, state, output, *, local=False):
     seen_path.write_text(json.dumps(seen), encoding='utf-8')
     old_report = json.loads((state/'report.json').read_text(encoding='utf-8')) if (state/'report.json').exists() else {}
     today = now().date().isoformat()
+    gap = round((now()-datetime.fromisoformat(old_report['checked_at'])).total_seconds()/60, 1) if old_report.get('checked_at') else None
     report = {'checked_at': now().isoformat(), 'mode': mode, 'open_posts': None if inventory_error else len(posts),
               'new_questions': new, 'supported_open': sum(p['supported'] for p in posts),
               'questions': [], 'blocked': [inventory_error] if inventory_error else [], 'publishing_enabled': mode == 'publish',
               'daily_report': old_report.get('last_daily') != today, 'last_daily': today,
               'connections': old_report.get('connections', {}),
               'connections_checked_date': old_report.get('connections_checked_date')}
+    report.update(gap_minutes=gap, schedule_delayed=gap is not None and gap > 60,
+                  was_schedule_delayed=old_report.get('schedule_delayed', False))
     if mode != 'observe':
         report['blocked'] += [key+' missing' for key in
             ('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY') if not os.environ.get(key)]
@@ -225,6 +247,18 @@ async def tick(mode, state, output, *, local=False):
                 raise RuntimeError('Forecast runner failed; inspect local state before resuming')
             if run_report.exists():
                 report['questions'] = json.loads(run_report.read_text(encoding='utf-8'))['questions']
+    outcomes = dict(old_report.get('notified_outcomes', {}))
+    report['new_results'] = []
+    for q in report['questions']:
+        decision = q.get('decision', q['status'])
+        if decision in ('already_attempted', 'started'):
+            continue
+        key = str(int(q['post_id']))
+        if outcomes.get(key) != decision:
+            report['new_results'].append({'post_id': int(key), 'decision': decision,
+                                         'decision_codes': q.get('decision_codes', [])})
+            outcomes[key] = decision
+    report['notified_outcomes'] = outcomes
     (state/'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     if not local and os.environ.get('HORIZON_NOTIFY') == 'true':
         await notify_github(report)
@@ -235,7 +269,9 @@ async def tick(mode, state, output, *, local=False):
     # Only stable numeric links in the public summary; no untrusted Markdown from titles.
     summary += [f'- https://www.metaculus.com/questions/{p["post_id"]}/ '
                 + ('(binary)' if p['supported'] else '(unsupported type)') for p in new]
-    summary += ['', '## Processing']+[f'- {q["post_id"]}: {q["status"]}' for q in report['questions']]
+    summary += ['', '## Processing']+[f'- {q["post_id"]}: {q.get("decision", q["status"])}; reasons: '+', '.join(q.get('decision_codes', [])) for q in report['questions']]
+    summary += ['', '## Schedule', f'Gap since previous check: {gap} minutes; target: 20 minutes.',
+                'Schedule delayed: '+str(report['schedule_delayed'])]
     summary += ['', '## Blockers']+['- '+x for x in report['blocked']]
     summary += ['', '## Connections', json.dumps(report['connections']),
                 'Last verified: '+str(report['connections_checked_date'])]

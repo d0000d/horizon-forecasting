@@ -132,6 +132,8 @@ class ForecastRecord:
     resolution_analysis: dict | None = None
     red_team: dict | None = None
     schema_version: int = 2
+    decision_codes: list[str] = field(default_factory=list)
+    adjudication: dict | None = None
 
 
 class HistoricalRetriever(Protocol):

@@ -26,6 +26,7 @@ def strings(value,limit=8):
 
 def role_prompt(role, question, context):
     contract = {
+        'adjudicator': 'Resolve each listed concern using ONLY supplied criteria and evidence. Do not change probabilities, invent facts, or assume missing evidence exists. A concern is resolved only if supplied evidence or explicit criteria answer it; ordinary uncertainty about the future alone is not a defect. Return JSON {"decisions":[{"concern_id":"...","resolved":false,"basis":"...","evidence_ids":["..."]}]}. Include every concern exactly once. basis must be an exact substring (20-500 characters) of the original criteria/fine print or one cited evidence item. Unresolved concerns may use an empty basis.',
         'selector': 'Select only supplied evidence relevant to the exact question, jurisdiction, indicator and date. A shared keyword is insufficient. Relevant evidence includes dated status-quo facts, causal drivers and obstacles, not only reports that the future event already happened. Do not require a future outcome as a prerequisite for forecasting. Preserve conflicting relevant evidence. Identify substantive missing inputs, not merely that the outcome is still unknown. Do not give a probability. Return JSON {"selected_ids":["..."],"missing_information":["..."]}. An empty selection is valid when nothing is relevant.',
         'research': 'Read supplied source snapshots. Select up to 6 relevant verbatim quotes, <=700 characters each. Do not invent facts, dates or sources. Return JSON {"evidence":[{"source_id":"...","quote":"...","direction":"yes|no|neutral"}],"missing_information":["..."]}.',
         'analyst': 'Analyze precise resolution conditions, not the topic. Return JSON {"yes_condition":"...","no_condition":"...","ambiguities":["..."],"key_variables":["..."],"needs_review":false}. Preserve unknown conditions as ambiguities.',
@@ -40,6 +41,30 @@ def parse_selection(text, evidence):
     strings(d['missing_information'])
     if len(set(selected)) != len(selected) or not set(selected) <= {e.id for e in evidence}:
         raise ValueError('Invalid evidence selection')
+    return d
+
+
+def parse_adjudication(text, concerns, evidence, question):
+    d = object_output(text, ('decisions',))
+    rows = d['decisions']
+    if not isinstance(rows, list) or len(rows) != len(concerns):
+        raise ValueError('Incomplete adjudication')
+    expected = {c['concern_id'] for c in concerns}
+    if any(not isinstance(r, dict) or set(r) != {'concern_id','resolved','basis','evidence_ids'} for r in rows):
+        raise ValueError('Invalid adjudication schema')
+    if {r['concern_id'] for r in rows} != expected:
+        raise ValueError('Missing or duplicate concern')
+    sources = {e.id: e.text for e in evidence}
+    for r in rows:
+        if type(r['resolved']) is not bool or not isinstance(r['basis'], str):
+            raise ValueError('Invalid adjudication decision')
+        ids = strings(r['evidence_ids'], limit=10)
+        if not set(ids) <= sources.keys():
+            raise ValueError('Unknown adjudication source')
+        if r['resolved']:
+            texts = [question.criteria, question.fine_print] + [sources[i] for i in ids]
+            if not 20 <= len(r['basis']) <= 500 or not any(r['basis'] in t for t in texts):
+                raise ValueError('Unverified adjudication basis')
     return d
 
 

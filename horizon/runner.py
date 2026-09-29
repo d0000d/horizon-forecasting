@@ -74,6 +74,17 @@ class Ledger:
             db.execute('UPDATE submissions SET state=?, detail=? WHERE question=?',
                        (state, detail, question_id))
 
+    def result(self, question_id):
+        with connect(self.path) as db:
+            row = db.execute('SELECT state, detail FROM submissions WHERE question=?', (question_id,)).fetchone()
+        if not row:
+            return {}
+        try:
+            detail = json.loads(row[1])
+        except (ValueError, TypeError):
+            detail = {}
+        return {'decision': row[0], 'decision_codes': detail.get('decision_codes', [])}
+
 
 class Metaculus:
     def __init__(self, client):
@@ -145,8 +156,9 @@ async def process(post, api, council, fetch_research, ledger, *, publish=False, 
         question = replace(question, as_of=clock(), close_time=cutoff)
         record = await forecast_automatically(council, question, source)
         if record.status != 'ok':
-            ledger.set(question_id, record.status)
-            return record.status  # deterministic abstention; never human editing
+            final = 'abstained_review' if record.status == 'review' and council.auto_resolve else record.status
+            ledger.set(question_id, final, json.dumps({'decision_codes': record.decision_codes}))
+            return final  # Terminal automatic decision, no human probability editing.
         if not publish:
             ledger.set(question_id, 'dry_run')
             return 'dry_run'
@@ -224,7 +236,7 @@ async def run(args):
     args.state.mkdir(parents=True, exist_ok=True)
     council = Council(provider, Budget(args.state/'budget.sqlite'),
                       Memory(args.state/'memory.sqlite'), uuid4().hex,
-                      select_evidence=True, analyze_resolution=True)
+                      select_evidence=True, analyze_resolution=True, auto_resolve=True)
     key = os.environ.get('ASKNEWS_API_KEY') or unprotect(args.credential_file.read_text())
     ledger = Ledger(args.state/('submissions.sqlite' if args.publish else 'dry-runs.sqlite'))
     summary = []
@@ -243,7 +255,11 @@ async def run(args):
                     status = await process(detail, api, council, fetch, ledger, publish=args.publish)
                 except Exception as exc:
                     status = 'failed:'+type(exc).__name__
-                summary.append({'post_id': post['id'], 'status': status})
+                decision = ledger.result(str(post['question']['id']))
+                if decision.get('decision') == 'review':
+                    # Legacy runs did not retain reasons. Never invent a cause or rerun a selected outcome.
+                    decision = {'decision': 'abstained_legacy_review', 'decision_codes': ['legacy_reason_unavailable']}
+                summary.append({'post_id': post['id'], 'status': status, **decision})
                 print(json.dumps(summary[-1]))
                 if sum(x['status'] not in ('already_forecast', 'already_attempted')
                        for x in summary) >= args.max_questions:
