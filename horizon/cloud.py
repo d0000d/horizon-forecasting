@@ -50,8 +50,10 @@ def previous_run(runs, number):
     last = max(previous, key=lambda r: r['run_number'])
     if last['run_number'] != number-1 or last['status'] != 'completed':
         raise RuntimeError('Previous run is missing or still active')
-    if last['conclusion'] != 'success':
-        raise RuntimeError('Previous run failed; inspect and reconcile before resuming')
+    if last['conclusion'] not in ('success', 'failure'):
+        raise RuntimeError('Previous run interrupted; inspect and reconcile before resuming')
+    # Failed health gates are recoverable only when restore_zip validates the
+    # complete checkpoint from this exact predecessor. Missing state still blocks.
     return last
 
 
@@ -146,6 +148,34 @@ def update_inventory(posts, seen):
     return new, sorted(set(seen) | {str(p['post_id']) for p in posts})
 
 
+def assess_health(report, posts):
+    """Separate job execution from actual coverage and confirmed submissions."""
+    reasons = list(report['blocked'])
+    unsupported = [p['post_id'] for p in posts if not p['supported']]
+    if unsupported:
+        reasons.append('Unsupported open questions: '+', '.join(map(str, unsupported)))
+    decisions = {int(q['post_id']): q.get('decision', q.get('status', 'unknown'))
+                 for q in report['questions']}
+    if report['mode'] != 'observe':
+        pending = [p['post_id'] for p in posts if p['supported'] and p['post_id'] not in decisions]
+        if pending:
+            reasons.append('Unprocessed open questions: '+', '.join(map(str, pending)))
+        good = {'submitted', 'already_forecast'}
+        if report['mode'] == 'dry-run':
+            good.add('dry_run')
+        for ident, decision in decisions.items():
+            if decision not in good:
+                reasons.append(f'Question {ident}: {decision}')
+    if report.get('schedule_delayed'):
+        reasons.append('Schedule delayed')
+    report['blocked'] = list(dict.fromkeys(reasons))
+    report['health'] = ('degraded' if reasons else 'observe' if report['mode'] == 'observe'
+                        else 'idle' if not posts else 'ok')
+    report['submitted_this_run'] = sum(q.get('status') == 'submitted' for q in report['questions'])
+    report['accepted_visible'] = sum(q.get('status') == 'already_forecast' for q in report['questions'])
+    return report
+
+
 async def notify_github(report):
     """Public question links only; assign the owner to deliver a GitHub notification."""
     import httpx
@@ -166,12 +196,13 @@ async def notify_github(report):
                         + 'Obavijest o pitanju nije potvrda objavljene prognoze.\n\n'
                         + f'Izvještaj: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'})
             response.raise_for_status()
-        if report['daily_report']:
+        if report['daily_report'] or report.get('health_changed', False):
             response = await client.post(f'/repos/{repo}/issues', json={
                 'title': 'Horizon: dnevni izvještaj '+report['checked_at'][:10],
                 'assignees': [owner],
                 'body': f'Način rada: **{report["mode"]}**\n\n'
                         + f'Otvoreno pitanja: {report["open_posts"]}; podržanih: {report["supported_open"]}.\n\n'
+                        + f'Stanje: **{report.get("health", "unknown")}**; potvrđene nove objave: {report.get("submitted_this_run", 0)}.\n\n'
                         + 'Prepreke: '+(', '.join(report['blocked']) or 'nema prijavljenih u ovoj provjeri')
                         + f'\n\nDetalji: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'})
             response.raise_for_status()
@@ -244,9 +275,12 @@ async def tick(mode, state, output, *, local=False):
                                             capture_output=True, text=True)
             run_report = state/'latest-run.json'
             if result.returncode != 0:
-                raise RuntimeError('Forecast runner failed; inspect local state before resuming')
+                report['blocked'].append('Forecast runner failed: exit '+str(result.returncode))
             if run_report.exists():
                 report['questions'] = json.loads(run_report.read_text(encoding='utf-8'))['questions']
+    assess_health(report, posts)
+    report['health_changed'] = report['blocked'] != old_report.get('blocked', []) or report['health'] != old_report.get('health')
+    report['runtime_sha'] = os.environ.get('HORIZON_RUNTIME_SHA', 'local')
     outcomes = dict(old_report.get('notified_outcomes', {}))
     report['new_results'] = []
     for q in report['questions']:
@@ -260,11 +294,13 @@ async def tick(mode, state, output, *, local=False):
             outcomes[key] = decision
     report['notified_outcomes'] = outcomes
     (state/'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    export_state(state, output, os.environ.get('GITHUB_RUN_ID', 'local'))
     if not local and os.environ.get('HORIZON_NOTIFY') == 'true':
         await notify_github(report)
-    export_state(state, output, os.environ.get('GITHUB_RUN_ID', 'local'))
     summary = ['# Horizon status', f'Checked: {report["checked_at"]}', f'Mode: **{mode}**',
-               f'Open posts: {len(posts)}; supported posts: {report["supported_open"]}',
+               f'Health: **{report["health"]}**; submitted this run: {report["submitted_this_run"]}',
+               f'Runtime commit: {report["runtime_sha"]}',
+               f'Open posts: {report["open_posts"]}; supported posts: {report["supported_open"]}',
                f'New posts: {len(new)}', '', '## New questions']
     # Only stable numeric links in the public summary; no untrusted Markdown from titles.
     summary += [f'- https://www.metaculus.com/questions/{p["post_id"]}/ '
@@ -293,7 +329,9 @@ def main():
         from .runner import load_local_metaculus, load_local_openrouter
         load_local_metaculus()
         load_local_openrouter()
-    asyncio.run(tick(args.mode, args.state, args.output, local=args.local))
+    report = asyncio.run(tick(args.mode, args.state, args.output, local=args.local))
+    if report['health'] == 'degraded':
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':
