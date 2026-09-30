@@ -135,7 +135,7 @@ async def inventory():
                     continue  # Announcements/notebooks are not forecast questions.
                 q = post.get('question') or {}
                 rows.append({'post_id': int(post['id']), 'title': str(post.get('title') or q.get('title') or ''),
-                             'supported': q.get('type') == 'binary' and q.get('status') == 'open'})
+                             'supported': q.get('type') in ('binary', 'numeric', 'discrete') and q.get('status') == 'open'})
             if len(page) < 100:
                 return rows
             offset += len(page)
@@ -161,7 +161,7 @@ async def notify_github(report):
             response = await client.post(f'/repos/{repo}/issues', json={
                 'title': title, 'assignees': [owner],
                 'body': f'Novo pitanje: https://www.metaculus.com/questions/{ident}/\n\n'
-                        + ('Podržano binarno pitanje.' if post['supported'] else 'Ovaj tip pitanja još nije podržan.')
+                        + ('Podržan tip pitanja.' if post['supported'] else 'Ovaj tip pitanja još nije podržan.')
                         + f'\n\nNačin rada: **{report["mode"]}**. '
                         + 'Obavijest o pitanju nije potvrda objavljene prognoze.\n\n'
                         + f'Izvještaj: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'})
@@ -264,11 +264,11 @@ async def tick(mode, state, output, *, local=False):
         await notify_github(report)
     export_state(state, output, os.environ.get('GITHUB_RUN_ID', 'local'))
     summary = ['# Horizon status', f'Checked: {report["checked_at"]}', f'Mode: **{mode}**',
-               f'Open posts: {len(posts)}; supported binary posts: {report["supported_open"]}',
+               f'Open posts: {len(posts)}; supported posts: {report["supported_open"]}',
                f'New posts: {len(new)}', '', '## New questions']
     # Only stable numeric links in the public summary; no untrusted Markdown from titles.
     summary += [f'- https://www.metaculus.com/questions/{p["post_id"]}/ '
-                + ('(binary)' if p['supported'] else '(unsupported type)') for p in new]
+                + ('(supported)' if p['supported'] else '(unsupported type)') for p in new]
     summary += ['', '## Processing']+[f'- {q["post_id"]}: {q.get("decision", q["status"])}; reasons: '+', '.join(q.get('decision_codes', [])) for q in report['questions']]
     summary += ['', '## Schedule', f'Gap since previous check: {gap} minutes; target: 20 minutes.',
                 'Schedule delayed: '+str(report['schedule_delayed'])]

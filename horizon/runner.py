@@ -39,12 +39,15 @@ def date(value):
 
 def question_from_post(post, timestamp):
     q = post['question']
-    if q['type'] != 'binary' or q['status'] != 'open':
-        raise ValueError('Only open standalone binary questions are supported')
+    if q['type'] not in ('binary', 'numeric', 'discrete') or q['status'] != 'open':
+        raise ValueError('Unsupported or closed question')
+    if q['type'] != 'binary':
+        from .numeric import specification
+        specification(q)
     close = date(q['scheduled_close_time'])
     deadline = date(q.get('scheduled_resolve_time') or q['scheduled_close_time'])
     return Question(str(q['id']), q['title'], q['resolution_criteria'], timestamp,
-                    deadline, background=q.get('description') or '',
+                    deadline, kind=q['type'], background=q.get('description') or '',
                     fine_print=q.get('fine_print') or '', close_time=close)
 
 
@@ -95,12 +98,12 @@ class Metaculus:
         while True:
             response = await self.client.get('/api/posts/', params={
                 'tournaments': tournament, 'statuses': 'open',
-                'forecast_type': 'binary', 'include_description': 'true',
+                'include_description': 'true',
                 'limit': 100, 'offset': offset, 'order_by': 'id'})
             response.raise_for_status()
             rows = response.json()['results']
             for post in rows:
-                if post.get('question'):
+                if post.get('question') and post['question'].get('type') in ('binary', 'numeric', 'discrete'):
                     yield post
             if len(rows) < 100:
                 break
@@ -110,6 +113,12 @@ class Metaculus:
         response = await self.client.get(f'/api/posts/{int(post_id)}/')
         response.raise_for_status()
         return response.json()
+
+    async def submit_numeric(self, question_id, value):
+        response = await self.client.post('/api/questions/forecast/', json=[{
+            'question': int(question_id), 'source': 'api', 'probability_yes': None,
+            'probability_yes_per_category': None, 'continuous_cdf': value}])
+        response.raise_for_status()
 
     async def submit(self, question_id, value):
         response = await self.client.post('/api/questions/forecast/', json=[{
@@ -137,6 +146,8 @@ def rationale(record):
 
 
 async def process(post, api, council, fetch_research, ledger, *, publish=False, clock=now):
+    if post['question']['type'] in ('numeric', 'discrete'):
+        return await process_numeric(post, api, council, fetch_research, ledger, publish=publish, clock=clock)
     question_id = str(post['question']['id'])
     if has_forecast(post):
         return 'already_forecast'
@@ -184,6 +195,51 @@ async def process(post, api, council, fetch_research, ledger, *, publish=False, 
     except Exception as exc:
         ledger.set(question_id, state if state != 'started' else 'failed', type(exc).__name__)
         return state if state != 'started' else 'failed'
+
+
+async def process_numeric(post, api, council, fetch_research, ledger, *, publish=False, clock=now):
+    from .numeric import forecast, specification
+    question = question_from_post(post, clock())
+    if has_forecast(post):
+        return 'already_forecast'
+    if not ledger.claim(question.id):
+        return 'already_attempted'
+    state = 'started'
+    try:
+        cutoff = question.close_time-timedelta(seconds=60)
+        if clock() >= cutoff:
+            ledger.set(question.id, 'deadline')
+            return 'deadline'
+        source = await asyncio.wait_for(fetch_research(question), min(60,(cutoff-clock()).total_seconds()))
+        question = replace(question, as_of=clock(), close_time=cutoff)
+        cdf, explanation = await forecast(council, question, post['question'], source)
+        if not publish:
+            ledger.set(question.id, 'dry_run')
+            return 'dry_run'
+        latest = await api.detail(post['id'])
+        refreshed = question_from_post(latest, clock())
+        if has_forecast(latest):
+            ledger.set(question.id, 'already_forecast')
+            return 'already_forecast'
+        if (refreshed.id != question.id or refreshed.kind != question.kind
+                or refreshed.criteria_hash != question.criteria_hash
+                or specification(latest['question']) != specification(post['question'])):
+            raise ValueError('Question changed during forecasting')
+        if clock() >= min(cutoff,refreshed.close_time-timedelta(seconds=60)):
+            ledger.set(question.id, 'deadline')
+            return 'deadline'
+        state = 'submission_uncertain'
+        ledger.set(question.id,state)
+        await api.submit_numeric(question.id,cdf)
+        state = 'forecast_accepted_comment_pending'
+        ledger.set(question.id,state)
+        await api.comment(post['id'],explanation)
+        ledger.set(question.id,'submitted')
+        return 'submitted'
+    except Exception as exc:
+        state = state if state != 'started' else 'failed'
+        ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__]}))
+        return state
 
 
 def preflight(config, credential_file):
