@@ -60,7 +60,7 @@ class CloudTests(unittest.TestCase):
     def test_missing_failed_or_running_predecessor_blocks(self):
         self.assertIsNone(previous_run([], 1))
         for runs in ([], [{'run_number': 1, 'status': 'in_progress', 'conclusion': None}],
-                     [{'run_number': 1, 'status': 'completed', 'conclusion': 'failure'}]):
+                     [{'run_number': 1, 'status': 'completed', 'conclusion': 'cancelled'}]):
             with self.assertRaises(RuntimeError):
                 previous_run(runs, 2)
         with self.assertRaises(RuntimeError):
