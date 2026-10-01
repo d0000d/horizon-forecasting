@@ -60,33 +60,69 @@ def has_forecast(post):
 
 
 class Ledger:
-    """At-most-once attempts. Uncertain sends need reconciliation, never retry."""
+    """Persist attempts; retry only transient research failures before model inference."""
     def __init__(self, path):
         self.path = str(path)
         with connect(self.path) as db:
             db.execute('CREATE TABLE IF NOT EXISTS submissions '
                        '(question TEXT PRIMARY KEY, state TEXT NOT NULL, detail TEXT)')
+            columns = {r[1] for r in db.execute('PRAGMA table_info(submissions)')}
+            for name, definition in (('attempts', 'INTEGER NOT NULL DEFAULT 1'),
+                                     ('updated_at', 'TEXT')):
+                if name not in columns:
+                    db.execute(f'ALTER TABLE submissions ADD COLUMN {name} {definition}')
+            db.execute('CREATE TABLE IF NOT EXISTS submission_history '
+                       '(question TEXT, state TEXT, detail TEXT, recorded_at TEXT)')
 
     def claim(self, question_id):
         with connect(self.path) as db:
-            return db.execute('INSERT OR IGNORE INTO submissions VALUES (?, ?, ?)',
-                              (question_id, 'started', '')).rowcount == 1
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT state, attempts, updated_at FROM submissions WHERE question=?',
+                             (question_id,)).fetchone()
+            timestamp = now().isoformat()
+            if row is None:
+                db.execute('INSERT INTO submissions (question,state,detail,attempts,updated_at) '
+                           'VALUES (?,?,?,1,?)', (question_id, 'started', '', timestamp))
+                return True
+            if row[0] != 'retryable_research_failure' or row[1] >= 3:
+                return False
+            if row[2] and (now()-date(row[2])).total_seconds() < 300:
+                return False
+            db.execute('UPDATE submissions SET state=?, detail=?, attempts=attempts+1, updated_at=? '
+                       'WHERE question=?', ('started', '', timestamp, question_id))
+            return True
 
     def set(self, question_id, state, detail=''):
         with connect(self.path) as db:
-            db.execute('UPDATE submissions SET state=?, detail=? WHERE question=?',
-                       (state, detail, question_id))
+            timestamp = now().isoformat()
+            db.execute('INSERT INTO submission_history VALUES (?,?,?,?)',
+                       (question_id, state, detail, timestamp))
+            db.execute('INSERT INTO submissions (question,state,detail,attempts,updated_at) '
+                       'VALUES (?,?,?,1,?) ON CONFLICT(question) DO UPDATE SET '
+                       'state=excluded.state,detail=excluded.detail,updated_at=excluded.updated_at',
+                       (question_id, state, detail, timestamp))
+
+    def totals(self):
+        with connect(self.path) as db:
+            states = dict(db.execute('SELECT state,COUNT(*) FROM submissions GROUP BY state'))
+        accepted = sum(states.get(s, 0) for s in
+                       ('submitted', 'already_forecast', 'forecast_accepted_comment_pending'))
+        return {'tracked_questions': sum(states.values()), 'accepted_forecasts': accepted,
+                'states': states}
 
     def result(self, question_id):
         with connect(self.path) as db:
-            row = db.execute('SELECT state, detail FROM submissions WHERE question=?', (question_id,)).fetchone()
+            row = db.execute('SELECT state, detail, attempts FROM submissions WHERE question=?', (question_id,)).fetchone()
         if not row:
             return {}
         try:
             detail = json.loads(row[1])
         except (ValueError, TypeError):
             detail = {}
-        return {'decision': row[0], 'decision_codes': detail.get('decision_codes', [])}
+        if not isinstance(detail, dict):
+            detail = {}
+        return {'decision': row[0], 'decision_codes': detail.get('decision_codes', []),
+                'attempts': row[2], 'retry_exhausted': row[0] == 'retryable_research_failure' and row[2] >= 3}
 
 
 class Metaculus:
@@ -145,17 +181,28 @@ def rationale(record):
     return '\n'.join(lines)
 
 
+def failure_state(exc, state, phase):
+    if state != 'started':
+        return state  # Never retry an uncertain or accepted submission.
+    import httpx
+    status = getattr(getattr(exc, 'response', None), 'status_code', None)
+    transient = isinstance(exc, (TimeoutError, httpx.TransportError)) or status in (429, 502, 503, 504)
+    return 'retryable_research_failure' if phase == 'research' and transient else 'failed'
+
+
 async def process(post, api, council, fetch_research, ledger, *, publish=False, clock=now):
     if post['question']['type'] in ('numeric', 'discrete'):
         return await process_numeric(post, api, council, fetch_research, ledger, publish=publish, clock=clock)
     question_id = str(post['question']['id'])
     if has_forecast(post):
+        ledger.set(str(post['question']['id']), 'already_forecast')
         return 'already_forecast'
     question = question_from_post(post, clock())
-    # Persist all attempts, including failures: no reruns selected by outcome.
+    # Do not regenerate predictions based on their probability or review outcome.
     if not ledger.claim(question_id):
         return 'already_attempted'
     state = 'started'
+    phase = 'research'
     try:
         cutoff = question.close_time-timedelta(seconds=60)
         if clock() >= cutoff:
@@ -163,6 +210,7 @@ async def process(post, api, council, fetch_research, ledger, *, publish=False, 
             return 'deadline'
         source = await asyncio.wait_for(fetch_research(question),
                                         min(60, (cutoff-clock()).total_seconds()))
+        phase = 'forecast'
         # Evidence is available at forecast time, after research completes.
         question = replace(question, as_of=clock(), close_time=cutoff)
         record = await forecast_automatically(council, question, source)
@@ -193,24 +241,28 @@ async def process(post, api, council, fetch_research, ledger, *, publish=False, 
         ledger.set(question_id, 'submitted')
         return 'submitted'
     except Exception as exc:
-        ledger.set(question_id, state if state != 'started' else 'failed', type(exc).__name__)
-        return state if state != 'started' else 'failed'
+        final = failure_state(exc, state, phase)
+        ledger.set(question_id, final, json.dumps({'decision_codes': [type(exc).__name__], 'phase': phase}))
+        return final
 
 
 async def process_numeric(post, api, council, fetch_research, ledger, *, publish=False, clock=now):
     from .numeric import forecast, specification
     question = question_from_post(post, clock())
     if has_forecast(post):
+        ledger.set(str(post['question']['id']), 'already_forecast')
         return 'already_forecast'
     if not ledger.claim(question.id):
         return 'already_attempted'
     state = 'started'
+    phase = 'research'
     try:
         cutoff = question.close_time-timedelta(seconds=60)
         if clock() >= cutoff:
             ledger.set(question.id, 'deadline')
             return 'deadline'
         source = await asyncio.wait_for(fetch_research(question), min(60,(cutoff-clock()).total_seconds()))
+        phase = 'forecast'
         question = replace(question, as_of=clock(), close_time=cutoff)
         cdf, explanation = await forecast(council, question, post['question'], source)
         if not publish:
@@ -237,8 +289,8 @@ async def process_numeric(post, api, council, fetch_research, ledger, *, publish
         ledger.set(question.id,'submitted')
         return 'submitted'
     except Exception as exc:
-        state = state if state != 'started' else 'failed'
-        ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__]}))
+        state = failure_state(exc, state, phase)
+        ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__], 'phase': phase}))
         return state
 
 
@@ -321,7 +373,7 @@ async def run(args):
                        for x in summary) >= args.max_questions:
                     break
     report = {'finished_at': now(), 'tournament': args.tournament, 'publish': args.publish,
-              'questions': summary, 'reserved_or_spent_eur': council.budget.used_eur()}
+              'questions': summary, 'submission_totals': ledger.totals(), 'reserved_or_spent_eur': council.budget.used_eur()}
     (args.state/'latest-run.json').write_text(encode(report), encoding='utf-8')
     if provider_name == 'openrouter':
         await provider.close()
