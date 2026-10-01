@@ -228,6 +228,7 @@ async def notify_github(report):
 
 async def tick(mode, state, output, *, local=False):
     from .budget import Budget
+    from .runner import Ledger
     if not local:
         await restore_cloud(state)
     state.mkdir(parents=True, exist_ok=True)
@@ -255,7 +256,7 @@ async def tick(mode, state, output, *, local=False):
               'connections_checked_date': old_report.get('connections_checked_date')}
     report.update(gap_minutes=gap, schedule_delayed=gap is not None and gap > 60,
                   was_schedule_delayed=old_report.get('schedule_delayed', False))
-    if mode != 'observe':
+    if mode != 'observe' and report['supported_open'] > 0:
         report['blocked'] += [key+' missing' for key in
             ('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY') if not os.environ.get(key)]
         if not report['blocked'] and report['connections_checked_date'] != today:
@@ -278,6 +279,7 @@ async def tick(mode, state, output, *, local=False):
                 report['blocked'].append('Forecast runner failed: exit '+str(result.returncode))
             if run_report.exists():
                 report['questions'] = json.loads(run_report.read_text(encoding='utf-8'))['questions']
+    report['submission_totals'] = Ledger(state/'submissions.sqlite').totals()
     assess_health(report, posts)
     report['health_changed'] = report['blocked'] != old_report.get('blocked', []) or report['health'] != old_report.get('health')
     report['runtime_sha'] = os.environ.get('HORIZON_RUNTIME_SHA', 'local')
@@ -300,6 +302,7 @@ async def tick(mode, state, output, *, local=False):
     summary = ['# Horizon status', f'Checked: {report["checked_at"]}', f'Mode: **{mode}**',
                f'Health: **{report["health"]}**; submitted this run: {report["submitted_this_run"]}',
                f'Runtime commit: {report["runtime_sha"]}',
+               'Cumulative submission ledger: '+json.dumps(report['submission_totals']),
                f'Open posts: {report["open_posts"]}; supported posts: {report["supported_open"]}',
                f'New posts: {len(new)}', '', '## New questions']
     # Only stable numeric links in the public summary; no untrusted Markdown from titles.
