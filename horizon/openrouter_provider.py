@@ -7,7 +7,7 @@ from .council import Reply
 class OpenRouterProvider:
     def __init__(self, *, model, input_usd_per_million, output_usd_per_million,
                  eur_per_usd_upper_bound, approved=False, max_output_tokens=2000,
-                 max_input_bytes=16000, client=None):
+                 max_input_bytes=16000, reasoning_effort=None, client=None):
         if not approved:
             raise PermissionError('Model API use requires approval')
         if not isinstance(model,str) or '/' not in model or model.startswith('~') or ':online' in model:
@@ -18,19 +18,22 @@ class OpenRouterProvider:
         self.fx = Decimal(str(eur_per_usd_upper_bound))
         if any(not v.is_finite() or v <= 0 for v in (self.input_rate,self.output_rate,self.fx)):
             raise ValueError('Verified positive price bounds required')
-        if type(max_output_tokens) is not int or not 256 <= max_output_tokens <= 4000:
+        if type(max_output_tokens) is not int or not 256 <= max_output_tokens <= 32768:
             raise ValueError('Invalid output limit')
         if type(max_input_bytes) is not int or max_input_bytes <= 0:
             raise ValueError('Invalid input limit')
         self.max_output_tokens = max_output_tokens
         self.max_input_bytes = max_input_bytes
+        if reasoning_effort not in (None, 'low', 'medium', 'high'):
+            raise ValueError('Invalid reasoning effort')
+        self.reasoning_effort = reasoning_effort
         if client is None:
             import httpx
             key = os.environ.get('OPENROUTER_API_KEY')
             if not key or key == 'REPLACE_ME':
                 raise ValueError('OPENROUTER_API_KEY missing')
             client = httpx.AsyncClient(base_url='https://openrouter.ai/api/v1/',
-                headers={'Authorization':'Bearer '+key}, timeout=60, follow_redirects=False)
+                headers={'Authorization':'Bearer '+key}, timeout=180, follow_redirects=False)
         self.client = client
 
     def quote_eur(self, prompt):
@@ -41,9 +44,11 @@ class OpenRouterProvider:
 
     async def complete(self, prompt):
         self.quote_eur(prompt)
+        reasoning = ({'reasoning': {'effort': self.reasoning_effort, 'exclude': True}}
+                     if self.reasoning_effort else {})
         response = await self.client.post('chat/completions', json={
             'model':self.model, 'messages':[{'role':'user','content':prompt}],
-            'max_tokens':self.max_output_tokens, 'stream':False,
+            'max_completion_tokens':self.max_output_tokens, 'stream':False, **reasoning,
             'response_format':{'type':'json_object'},
             'provider':{'allow_fallbacks':False, 'require_parameters':True,
                         'max_price':{'prompt':float(self.input_rate),

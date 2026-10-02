@@ -295,7 +295,7 @@ async def tick(mode, state, output, *, local=False, restore=True):
               'daily_report': old_report.get('last_daily') != today, 'last_daily': today,
               'connections': old_report.get('connections', {}),
               'connections_checked_date': old_report.get('connections_checked_date')}
-    report.update(gap_minutes=gap, schedule_delayed=gap is not None and gap > 60,
+    report.update(gap_minutes=gap, schedule_delayed=gap is not None and gap > 10,
                   was_schedule_delayed=old_report.get('schedule_delayed', False))
     if mode != 'observe':
         report['blocked'] += [key+' missing' for key in
@@ -315,7 +315,7 @@ async def tick(mode, state, output, *, local=False, restore=True):
             # A timeout intentionally prevents checkpoint export. The next job fails closed.
             run_report = state/'latest-run.json'
             run_report.unlink(missing_ok=True)
-            result = await asyncio.to_thread(subprocess.run, command, timeout=900,
+            result = await asyncio.to_thread(subprocess.run, command, timeout=2400,
                                             capture_output=True, text=True)
             run_report = state/'latest-run.json'
             if result.returncode != 0:
@@ -353,7 +353,7 @@ async def tick(mode, state, output, *, local=False, restore=True):
     summary += [f'- https://www.metaculus.com/questions/{p["post_id"]}/ '
                 + ('(supported)' if p['supported'] else '(unsupported type)') for p in new]
     summary += ['', '## Processing']+[f'- {q["post_id"]}: {q.get("decision", q["status"])}; reasons: '+', '.join(q.get('decision_codes', [])) for q in report['questions']]
-    summary += ['', '## Schedule', f'Gap since previous check: {gap} minutes; target: 20 minutes.',
+    summary += ['', '## Schedule', f'Gap since previous check: {gap} minutes; target: 5 minutes.',
                 'Schedule delayed: '+str(report['schedule_delayed'])]
     summary += ['', '## Blockers']+['- '+x for x in report['blocked']]
     summary += ['', '## Connections', json.dumps(report['connections']),
@@ -369,14 +369,15 @@ async def watch(args):
     started = monotonic()
     first = True
     while True:
+        tick_started = monotonic()
         report = await tick(args.mode, args.state, args.output,
                             local=args.local, restore=first)
         first = False
         remaining = args.watch_minutes*60-(monotonic()-started)
-        # Reserve 15 minutes for a paid forecasting batch and state export.
-        if args.watch_minutes == 0 or remaining < args.interval_seconds+900:
+        # Reserve 40 minutes for a paid forecasting batch and state export.
+        if args.watch_minutes == 0 or remaining < args.interval_seconds+2400:
             return report
-        await asyncio.sleep(args.interval_seconds)
+        await asyncio.sleep(max(0, args.interval_seconds-(monotonic()-tick_started)))
 
 
 def main():

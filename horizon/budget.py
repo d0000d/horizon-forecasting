@@ -16,11 +16,11 @@ def micros(euros):
 
 
 class Budget:
-    def __init__(self, path, total_eur=50, run_eur=10, question_eur=2):
+    def __init__(self, path, total_eur=100, run_eur=40, question_eur=20):
         self.path = str(path)
         self.limits = tuple(micros(x) for x in (total_eur, run_eur, question_eur))
-        if not 0 < self.limits[2] <= self.limits[1] <= self.limits[0] <= micros(50):
-            raise ValueError("Require 0 < question <= run <= total <= EUR 50")
+        if not 0 < self.limits[2] <= self.limits[1] <= self.limits[0] <= micros(100):
+            raise ValueError("Require 0 < question <= run <= total <= EUR 100")
         with connect(self.path) as db:
             db.execute('CREATE TABLE IF NOT EXISTS calls (id TEXT PRIMARY KEY, run TEXT, question TEXT, amount INTEGER, settled INTEGER)')
 

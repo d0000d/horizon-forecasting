@@ -172,7 +172,7 @@ async def forecast(council, question, q, research):
         remaining = ((question.close_time or question.deadline)-council.clock()).total_seconds()
         if remaining <= 0:
             raise TimeoutError('Forecast deadline')
-        reply = await asyncio.wait_for(provider.complete(prompt),min(60,remaining))
+        reply = await asyncio.wait_for(provider.complete(prompt),min(council.timeout,remaining))
         council.budget.settle(ticket,reply.cost_eur)
         cdf, reason, selected = parse(reply.text,q,[e.id for e in evidence])
         distributions.append(cdf)

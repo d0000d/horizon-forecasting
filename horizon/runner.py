@@ -262,8 +262,8 @@ def preflight(config, credential_file):
                 if provider_name == 'openai':
                     settings['model'] = 'openai/'+settings['model']
                 checker = OpenRouterProvider(approved=True, client=object(), **settings)
-                if checker.quote_eur('x'*checker.max_input_bytes)*8 > 2:
-                    problems.append('Eight bounded Council calls exceed EUR 2 question budget')
+                if checker.quote_eur('x'*checker.max_input_bytes)*8 > 20:
+                    problems.append('Eight bounded Council calls exceed EUR 20 question budget')
         except (ValueError, AttributeError, TypeError, KeyError):
             problems.append('Invalid model configuration')
     model_key = 'OPENROUTER_API_KEY' if provider_name == 'openrouter' else 'OPENAI_API_KEY'
@@ -293,7 +293,7 @@ async def run(args):
     council = Council(provider, Budget(args.state/'budget.sqlite'),
                       Memory(args.state/'memory.sqlite'), os.environ.get('GITHUB_RUN_ID') or uuid4().hex,
                       select_evidence=True, analyze_resolution=True, auto_resolve=True,
-                      red_team_mode='always')
+                      red_team_mode='always', timeout=180)
     key = os.environ.get('ASKNEWS_API_KEY') or unprotect(args.credential_file.read_text())
     ledger = Ledger(args.state/('submissions.sqlite' if args.publish else 'dry-runs.sqlite'))
     summary = []
