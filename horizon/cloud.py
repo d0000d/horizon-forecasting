@@ -10,8 +10,10 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from time import monotonic
 
 from .runner import now
+from .storage import connect
 
 FILES = {'checkpoint.json', 'seen.json', 'report.json', 'budget.sqlite',
          'dry-runs.sqlite', 'submissions.sqlite'}
@@ -100,7 +102,29 @@ async def restore_cloud(state):
         response = await client.get(f'/repos/{repo}/actions/workflows/{workflow_id}/runs',
                                     params={'per_page': 100})
         response.raise_for_status()
-        last = previous_run(response.json()['workflow_runs'], number)
+        runs = response.json()['workflow_runs']
+        # Concurrency can cancel a queued run before any job starts. Only those
+        # provably empty runs may be skipped; a cancelled executing job blocks.
+        candidates = sorted((r for r in runs if r['run_number'] < number),
+                            key=lambda r: r['run_number'], reverse=True)
+        expected = number-1
+        last = None
+        for candidate in candidates:
+            if candidate['run_number'] != expected or candidate['status'] != 'completed':
+                raise RuntimeError('Previous run history missing or still active')
+            if candidate['conclusion'] in ('cancelled', 'skipped'):
+                jobs = await client.get(f'/repos/{repo}/actions/runs/{candidate["id"]}/jobs')
+                jobs.raise_for_status()
+                if jobs.json().get('total_count') != 0:
+                    raise RuntimeError('Interrupted job requires state reconciliation')
+                expected -= 1
+                continue
+            if candidate['conclusion'] not in ('success', 'failure'):
+                raise RuntimeError('Previous run needs reconciliation')
+            last = candidate
+            break
+        if last is None and expected != 0:
+            raise RuntimeError('Previous durable run missing')
         if last is None:
             state.mkdir(parents=True, exist_ok=True)
             return
@@ -146,6 +170,20 @@ async def inventory():
 def update_inventory(posts, seen):
     new = [p for p in posts if str(p['post_id']) not in seen]
     return new, sorted(set(seen) | {str(p['post_id']) for p in posts})
+
+
+def submission_totals(state):
+    """Count unique accepted questions across runs, including closed questions."""
+    path = state/'submissions.sqlite'
+    counts = {}
+    if path.exists():
+        with connect(path) as db:
+            counts = dict(db.execute('SELECT state, COUNT(*) FROM submissions GROUP BY state'))
+    accepted = ('submitted', 'already_forecast', 'forecast_accepted_comment_pending')
+    return {'accepted_total': sum(counts.get(key, 0) for key in accepted),
+            'submission_states': counts,
+            'uncertain_total': counts.get('submission_uncertain', 0),
+            'comment_pending_total': counts.get('forecast_accepted_comment_pending', 0)}
 
 
 def assess_health(report, posts):
@@ -203,6 +241,8 @@ async def notify_github(report):
                 'body': f'Način rada: **{report["mode"]}**\n\n'
                         + f'Otvoreno pitanja: {report["open_posts"]}; podržanih: {report["supported_open"]}.\n\n'
                         + f'Stanje: **{report.get("health", "unknown")}**; potvrđene nove objave: {report.get("submitted_this_run", 0)}.\n\n'
+                        + f'Ukupno prihvaćenih pitanja u trajnoj evidenciji: **{report["accepted_total"]}**.\n\n'
+                        + f'Neizvjesna slanja: {report["uncertain_total"]}; čeka komentar: {report["comment_pending_total"]}.\n\n'
                         + 'Prepreke: '+(', '.join(report['blocked']) or 'nema prijavljenih u ovoj provjeri')
                         + f'\n\nDetalji: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'})
             response.raise_for_status()
@@ -226,10 +266,12 @@ async def notify_github(report):
             response.raise_for_status()
 
 
-async def tick(mode, state, output, *, local=False):
+async def tick(mode, state, output, *, local=False, restore=True):
     from .budget import Budget
-    if not local:
+    if not local and restore:
         await restore_cloud(state)
+    # A failed/uncertain tick must never upload an earlier tick's checkpoint.
+    (output/'checkpoint.json').unlink(missing_ok=True)
     state.mkdir(parents=True, exist_ok=True)
     Budget(state/'budget.sqlite')
     inventory_error = None
@@ -258,19 +300,21 @@ async def tick(mode, state, output, *, local=False):
     if mode != 'observe':
         report['blocked'] += [key+' missing' for key in
             ('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY') if not os.environ.get(key)]
-        if not report['blocked'] and report['connections_checked_date'] != today:
+        if posts and not report['blocked'] and report['connections_checked_date'] != today:
             try:
                 report['connections'] = await verify_connections()
                 report['connections_checked_date'] = today
             except Exception as exc:
                 report['blocked'].append('Service connection check failed: '+type(exc).__name__)
-        if not report['blocked']:
+        if posts and not report['blocked']:
             command = [sys.executable, '-m', 'horizon.runner', '--config', 'configs/openrouter.example.json',
                        '--run', '--allow-paid-api', '--tournament', 'fall-futureeval-2026',
                        '--state', str(state), '--max-questions', '3']
             if mode == 'publish':
                 command.append('--publish')
             # A timeout intentionally prevents checkpoint export. The next job fails closed.
+            run_report = state/'latest-run.json'
+            run_report.unlink(missing_ok=True)
             result = await asyncio.to_thread(subprocess.run, command, timeout=900,
                                             capture_output=True, text=True)
             run_report = state/'latest-run.json'
@@ -279,6 +323,7 @@ async def tick(mode, state, output, *, local=False):
             if run_report.exists():
                 report['questions'] = json.loads(run_report.read_text(encoding='utf-8'))['questions']
     assess_health(report, posts)
+    report.update(submission_totals(state))
     report['health_changed'] = report['blocked'] != old_report.get('blocked', []) or report['health'] != old_report.get('health')
     report['runtime_sha'] = os.environ.get('HORIZON_RUNTIME_SHA', 'local')
     outcomes = dict(old_report.get('notified_outcomes', {}))
@@ -299,6 +344,8 @@ async def tick(mode, state, output, *, local=False):
         await notify_github(report)
     summary = ['# Horizon status', f'Checked: {report["checked_at"]}', f'Mode: **{mode}**',
                f'Health: **{report["health"]}**; submitted this run: {report["submitted_this_run"]}',
+               f'Accepted questions, all runs: **{report["accepted_total"]}**; uncertain sends: {report["uncertain_total"]}',
+               'Cumulative submission states: '+json.dumps(report['submission_states']),
                f'Runtime commit: {report["runtime_sha"]}',
                f'Open posts: {report["open_posts"]}; supported posts: {report["supported_open"]}',
                f'New posts: {len(new)}', '', '## New questions']
@@ -314,8 +361,22 @@ async def tick(mode, state, output, *, local=False):
     summary += ['', 'No forecast probabilities, credentials, research text or model traces are uploaded.']
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('\n\n'.join(summary), encoding='utf-8')
-    print(json.dumps(report, ensure_ascii=True))
+    print(json.dumps(report, ensure_ascii=True), flush=True)
     return report
+
+
+async def watch(args):
+    started = monotonic()
+    first = True
+    while True:
+        report = await tick(args.mode, args.state, args.output,
+                            local=args.local, restore=first)
+        first = False
+        remaining = args.watch_minutes*60-(monotonic()-started)
+        # Reserve 15 minutes for a paid forecasting batch and state export.
+        if args.watch_minutes == 0 or remaining < args.interval_seconds+900:
+            return report
+        await asyncio.sleep(args.interval_seconds)
 
 
 def main():
@@ -324,12 +385,16 @@ def main():
     parser.add_argument('--state', type=Path, default=Path('work/cloud'))
     parser.add_argument('--output', type=Path, default=Path('work/cloud-export'))
     parser.add_argument('--local', action='store_true')
+    parser.add_argument('--watch-minutes', type=int, default=0)
+    parser.add_argument('--interval-seconds', type=int, default=300)
     args = parser.parse_args()
+    if not 0 <= args.watch_minutes <= 330 or not 60 <= args.interval_seconds <= 1200:
+        parser.error('Watch must be 0..330 minutes; interval 60..1200 seconds')
     if args.local:
         from .runner import load_local_metaculus, load_local_openrouter
         load_local_metaculus()
         load_local_openrouter()
-    report = asyncio.run(tick(args.mode, args.state, args.output, local=args.local))
+    report = asyncio.run(watch(args))
     if report['health'] == 'degraded':
         raise SystemExit(1)
 

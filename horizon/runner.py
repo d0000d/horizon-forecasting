@@ -150,6 +150,8 @@ async def process(post, api, council, fetch_research, ledger, *, publish=False, 
         return await process_numeric(post, api, council, fetch_research, ledger, publish=publish, clock=clock)
     question_id = str(post['question']['id'])
     if has_forecast(post):
+        ledger.claim(question_id)
+        ledger.set(question_id, 'already_forecast')
         return 'already_forecast'
     question = question_from_post(post, clock())
     # Persist all attempts, including failures: no reruns selected by outcome.
@@ -201,6 +203,8 @@ async def process_numeric(post, api, council, fetch_research, ledger, *, publish
     from .numeric import forecast, specification
     question = question_from_post(post, clock())
     if has_forecast(post):
+        ledger.claim(question.id)
+        ledger.set(question.id, 'already_forecast')
         return 'already_forecast'
     if not ledger.claim(question.id):
         return 'already_attempted'
@@ -258,12 +262,8 @@ def preflight(config, credential_file):
                 if provider_name == 'openai':
                     settings['model'] = 'openai/'+settings['model']
                 checker = OpenRouterProvider(approved=True, client=object(), **settings)
-                if checker.quote_eur('') > 0.05:
-                    problems.append('Minimum model reservation exceeds EUR 0.05 question budget')
-                elif checker.quote_eur('')*6 > 0.05:
-                    problems.append('Six minimum Council reservations exceed EUR 0.05 question budget')
-                elif checker.quote_eur('x'*checker.max_input_bytes) > 0.05:
-                    problems.append('Maximum-size model call exceeds EUR 0.05 question budget')
+                if checker.quote_eur('x'*checker.max_input_bytes)*8 > 2:
+                    problems.append('Eight bounded Council calls exceed EUR 2 question budget')
         except (ValueError, AttributeError, TypeError, KeyError):
             problems.append('Invalid model configuration')
     model_key = 'OPENROUTER_API_KEY' if provider_name == 'openrouter' else 'OPENAI_API_KEY'
@@ -291,8 +291,9 @@ async def run(args):
         provider = OpenAIProvider(approved=True, **config)
     args.state.mkdir(parents=True, exist_ok=True)
     council = Council(provider, Budget(args.state/'budget.sqlite'),
-                      Memory(args.state/'memory.sqlite'), uuid4().hex,
-                      select_evidence=True, analyze_resolution=True, auto_resolve=True)
+                      Memory(args.state/'memory.sqlite'), os.environ.get('GITHUB_RUN_ID') or uuid4().hex,
+                      select_evidence=True, analyze_resolution=True, auto_resolve=True,
+                      red_team_mode='always')
     key = os.environ.get('ASKNEWS_API_KEY') or unprotect(args.credential_file.read_text())
     ledger = Ledger(args.state/('submissions.sqlite' if args.publish else 'dry-runs.sqlite'))
     summary = []
@@ -312,6 +313,8 @@ async def run(args):
                 except Exception as exc:
                     status = 'failed:'+type(exc).__name__
                 decision = ledger.result(str(post['question']['id']))
+                if status == 'already_forecast':
+                    decision = {'decision': 'already_forecast', 'decision_codes': []}
                 if decision.get('decision') == 'review':
                     # Legacy runs did not retain reasons. Never invent a cause or rerun a selected outcome.
                     decision = {'decision': 'abstained_legacy_review', 'decision_codes': ['legacy_reason_unavailable']}
