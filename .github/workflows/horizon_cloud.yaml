@@ -25,7 +25,7 @@ concurrency:
 
 env:
   # Exact approved runtime; offline tests omitted at owner's request.
-  HORIZON_RUNTIME_SHA: 1ebd16d10a2bdd25009ad7f7206cc24df474eb07
+  HORIZON_RUNTIME_SHA: 24e7144d23d9391e9f242043237df27b2a2124cf
 
 jobs:
   monitor:
