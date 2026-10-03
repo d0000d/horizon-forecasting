@@ -1,0 +1,35 @@
+name: Horizon independent inventory
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/horizon_inventory.yaml]
+  schedule:
+    - cron: '*/6 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: horizon-read-only-inventory
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b7f44944891b09b252751307aa113ffaeb86e218
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install runtime dependencies
+        run: python -m pip install asknews==0.13.11 httpx==0.28.1
+      - name: Poll questions every six minutes without submitting forecasts
+        env:
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
+        run: python -u -m horizon.cloud --inventory-only --watch-minutes 330 --interval-seconds 360

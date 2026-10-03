@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths: [.github/workflows/horizon_cloud.yaml]
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/6 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -25,7 +25,7 @@ concurrency:
 
 env:
   # Exact approved runtime; offline tests omitted at owner's request.
-  HORIZON_RUNTIME_SHA: 24e7144d23d9391e9f242043237df27b2a2124cf
+  HORIZON_RUNTIME_SHA: b7f44944891b09b252751307aa113ffaeb86e218
 
 jobs:
   monitor:
@@ -52,7 +52,7 @@ jobs:
           HORIZON_NOTIFY: 'true'
           HORIZON_MODE: ${{ github.event_name == 'push' && 'observe' || inputs.mode || vars.HORIZON_MODE || 'observe' }}
           HORIZON_WATCH_MINUTES: ${{ github.event_name == 'push' && '0' || '330' }}
-        run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 300
+        run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 360
       - name: Persist operational state even after degraded health
         if: ${{ always() && hashFiles('work/cloud-export/checkpoint.json') != '' }}
         uses: actions/upload-artifact@v4
