@@ -4,7 +4,7 @@
   "input_usd_per_million": 10,
   "output_usd_per_million": 50,
   "eur_per_usd_upper_bound": 1.2,
-  "max_output_tokens": 16384,
-  "reasoning_effort": "medium",
+  "max_output_tokens": 24576,
+  "reasoning_effort": "max",
   "max_input_bytes": 64000
 }
