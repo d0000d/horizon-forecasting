@@ -293,7 +293,7 @@ async def run(args):
     council = Council(provider, Budget(args.state/'budget.sqlite'),
                       Memory(args.state/'memory.sqlite'), os.environ.get('GITHUB_RUN_ID') or uuid4().hex,
                       select_evidence=True, analyze_resolution=True, auto_resolve=True,
-                      red_team_mode='always', timeout=180)
+                      red_team_mode='always', timeout=240)
     key = os.environ.get('ASKNEWS_API_KEY') or unprotect(args.credential_file.read_text())
     ledger = Ledger(args.state/('submissions.sqlite' if args.publish else 'dry-runs.sqlite'))
     summary = []

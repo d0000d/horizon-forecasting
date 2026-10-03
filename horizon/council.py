@@ -129,13 +129,11 @@ class Council:
             if result is not None:
                 agents.append(result)
 
-        for role in ('outside','inside'):
+        for role in ('outside','inside','skeptic'):
             if not fatal_budget and not halted:
                 await forecaster(role)
         spread, cruxes = disagreement(agents)
-        # The skeptic only recovers missing forecasts; adversarial review is a separate role.
-        if not fatal_budget and not halted and (len(agents)<2 or (self.red_team_mode=='off' and spread>=self.threshold)):
-            await forecaster('skeptic')
+        # Three blind forecasts on every question; adversarial review remains separate.
         spread, cruxes = disagreement(agents)
         extreme = any(a.probability<=.05 or a.probability>=.95 for a in agents)
         needs_audit = self.red_team_mode=='always' or (

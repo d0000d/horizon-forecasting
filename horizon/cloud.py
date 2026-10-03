@@ -309,7 +309,7 @@ async def tick(mode, state, output, *, local=False, restore=True):
         if posts and not report['blocked']:
             command = [sys.executable, '-m', 'horizon.runner', '--config', 'configs/openrouter.example.json',
                        '--run', '--allow-paid-api', '--tournament', 'fall-futureeval-2026',
-                       '--state', str(state), '--max-questions', '3']
+                       '--state', str(state), '--max-questions', '1']
             if mode == 'publish':
                 command.append('--publish')
             # A timeout intentionally prevents checkpoint export. The next job fails closed.

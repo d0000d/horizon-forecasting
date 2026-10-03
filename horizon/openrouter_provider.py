@@ -24,7 +24,7 @@ class OpenRouterProvider:
             raise ValueError('Invalid input limit')
         self.max_output_tokens = max_output_tokens
         self.max_input_bytes = max_input_bytes
-        if reasoning_effort not in (None, 'low', 'medium', 'high'):
+        if reasoning_effort not in (None, 'low', 'medium', 'high', 'xhigh', 'max'):
             raise ValueError('Invalid reasoning effort')
         self.reasoning_effort = reasoning_effort
         if client is None:
@@ -33,7 +33,7 @@ class OpenRouterProvider:
             if not key or key == 'REPLACE_ME':
                 raise ValueError('OPENROUTER_API_KEY missing')
             client = httpx.AsyncClient(base_url='https://openrouter.ai/api/v1/',
-                headers={'Authorization':'Bearer '+key}, timeout=180, follow_redirects=False)
+                headers={'Authorization':'Bearer '+key}, timeout=240, follow_redirects=False)
         self.client = client
 
     def quote_eur(self, prompt):
