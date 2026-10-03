@@ -353,7 +353,7 @@ async def tick(mode, state, output, *, local=False, restore=True):
     summary += [f'- https://www.metaculus.com/questions/{p["post_id"]}/ '
                 + ('(supported)' if p['supported'] else '(unsupported type)') for p in new]
     summary += ['', '## Processing']+[f'- {q["post_id"]}: {q.get("decision", q["status"])}; reasons: '+', '.join(q.get('decision_codes', [])) for q in report['questions']]
-    summary += ['', '## Schedule', f'Gap since previous check: {gap} minutes; target: 5 minutes.',
+    summary += ['', '## Schedule', f'Gap since previous processing check: {gap} minutes; inventory target: 6 minutes.',
                 'Schedule delayed: '+str(report['schedule_delayed'])]
     summary += ['', '## Blockers']+['- '+x for x in report['blocked']]
     summary += ['', '## Connections', json.dumps(report['connections']),
@@ -365,7 +365,38 @@ async def tick(mode, state, output, *, local=False, restore=True):
     return report
 
 
+async def inventory_watch(interval):
+    """Read-only polling continues even while paid forecasting is in progress."""
+    while True:
+        started = monotonic()
+        checked_at = now().isoformat()
+        try:
+            posts = await inventory()
+            event = {'event': 'inventory_poll', 'checked_at': checked_at,
+                     'interval_seconds': interval, 'open_posts': len(posts),
+                     'post_ids': [p['post_id'] for p in posts], 'status': 'ok'}
+        except Exception as exc:
+            event = {'event': 'inventory_poll', 'checked_at': checked_at,
+                     'interval_seconds': interval, 'status': 'failed',
+                     'error': type(exc).__name__}
+        print(json.dumps(event), flush=True)
+        await asyncio.sleep(max(0, interval-(monotonic()-started)))
+
+
 async def watch(args):
+    monitor = asyncio.create_task(inventory_watch(args.interval_seconds)) if args.watch_minutes else None
+    try:
+        return await processing_watch(args)
+    finally:
+        if monitor is not None:
+            monitor.cancel()
+            try:
+                await monitor
+            except asyncio.CancelledError:
+                pass
+
+
+async def processing_watch(args):
     started = monotonic()
     first = True
     while True:
@@ -386,11 +417,22 @@ def main():
     parser.add_argument('--state', type=Path, default=Path('work/cloud'))
     parser.add_argument('--output', type=Path, default=Path('work/cloud-export'))
     parser.add_argument('--local', action='store_true')
+    parser.add_argument('--inventory-only', action='store_true')
     parser.add_argument('--watch-minutes', type=int, default=0)
-    parser.add_argument('--interval-seconds', type=int, default=300)
+    parser.add_argument('--interval-seconds', type=int, default=360)
     args = parser.parse_args()
     if not 0 <= args.watch_minutes <= 330 or not 60 <= args.interval_seconds <= 1200:
         parser.error('Watch must be 0..330 minutes; interval 60..1200 seconds')
+    if args.inventory_only:
+        if args.watch_minutes == 0:
+            parser.error('Inventory-only requires positive watch minutes')
+        async def read_only_monitor():
+            try:
+                await asyncio.wait_for(inventory_watch(args.interval_seconds), args.watch_minutes*60)
+            except asyncio.TimeoutError:
+                pass
+        asyncio.run(read_only_monitor())
+        return
     if args.local:
         from .runner import load_local_metaculus, load_local_openrouter
         load_local_metaculus()
