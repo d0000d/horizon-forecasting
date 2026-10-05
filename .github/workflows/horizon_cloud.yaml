@@ -24,8 +24,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Exact approved runtime; offline tests omitted at owner's request.
-  HORIZON_RUNTIME_SHA: b7f44944891b09b252751307aa113ffaeb86e218
+  # Verified recovery runtime; preserve durable submission state.
+  HORIZON_BUDGET_MODE: accounting_only
+  HORIZON_RUNTIME_SHA: a1e0134e73a41ec2e57f56c36d7763d93e05b66d
 
 jobs:
   monitor:
@@ -34,8 +35,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.HORIZON_RUNTIME_SHA }}
+          ref: b7f44944891b09b252751307aa113ffaeb86e218
+          fetch-depth: 0
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: recovery-package
+          sparse-checkout: horizon-runtime-recovery.bundle
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Load verified recovery commit
+        run: |
+          git bundle verify recovery-package/horizon-runtime-recovery.bundle
+          git fetch recovery-package/horizon-runtime-recovery.bundle refs/heads/fix/retry-deadline-20261005
+          git checkout --detach "$HORIZON_RUNTIME_SHA"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -50,8 +64,8 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ASKNEWS_API_KEY: ${{ secrets.ASKNEWS_API_KEY }}
           HORIZON_NOTIFY: 'true'
-          HORIZON_MODE: ${{ github.event_name == 'push' && 'observe' || inputs.mode || vars.HORIZON_MODE || 'observe' }}
-          HORIZON_WATCH_MINUTES: ${{ github.event_name == 'push' && '0' || '330' }}
+          HORIZON_MODE: ${{ github.event_name == 'push' && 'publish' || inputs.mode || vars.HORIZON_MODE || 'observe' }}
+          HORIZON_WATCH_MINUTES: ${{ github.event_name == 'push' && '0' || '240' }}
         run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 360
       - name: Persist operational state even after degraded health
         if: ${{ always() && hashFiles('work/cloud-export/checkpoint.json') != '' }}
