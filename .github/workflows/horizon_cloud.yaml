@@ -26,7 +26,7 @@ concurrency:
 env:
   # Verified recovery runtime; preserve durable submission state.
   HORIZON_BUDGET_MODE: accounting_only
-  HORIZON_RUNTIME_SHA: a1e0134e73a41ec2e57f56c36d7763d93e05b66d
+  HORIZON_RUNTIME_SHA: 933cc5d6f9dfb2b8c36a7d2f8be8348cc1771b23
 
 jobs:
   monitor:
