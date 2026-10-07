@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 15
     env:
       HORIZON_BUDGET_MODE: accounting_only
-      HORIZON_RUNTIME_SHA: 4c3c966f2940564df60953cc1918cdd3bc822c55
+      HORIZON_RUNTIME_SHA: cfa1a62cd3390739a64a9303d835c52dd475ab6b
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,4 +58,3 @@ jobs:
                   await provider.close()
           asyncio.run(main())
           PY
-
