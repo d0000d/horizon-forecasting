@@ -16,16 +16,20 @@ jobs:
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
         run: |
           python - <<'PY'
-          import json, os, urllib.request
+          import json, os, urllib.request, urllib.error
           def read(url, token=None):
               headers = {'Authorization': 'Token '+token} if token else {}
-              return json.load(urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30))
+              try:
+                  return json.load(urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30))
+              except urllib.error.HTTPError as e:
+                  print(json.dumps({'endpoint':url, 'http_status':e.code, 'error_body':e.read(500).decode('utf-8', errors='replace')}))
+                  return {}
           def question(q):
               return {k: q.get(k) for k in ('id','type','status','scheduled_close_time','scheduled_resolve_time','options')} if q else None
           p = read('https://www.metaculus.com/api/posts/46000/', os.environ['METACULUS_TOKEN'])
           g = p.get('group_of_questions') or {}
           c = p.get('conditional') or {}
-          print(json.dumps({'post_id':p['id'], 'question':question(p.get('question')), 'group_questions':[question(q) for q in g.get('questions',[])], 'conditional_keys':list(c), 'post_status':p.get('status')}, sort_keys=True))
+          print(json.dumps({'post_id':p.get('id'), 'question':question(p.get('question')), 'group_questions':[question(q) for q in g.get('questions',[])], 'conditional_keys':list(c), 'post_status':p.get('status')}, sort_keys=True))
           models = read('https://openrouter.ai/api/v1/models')['data']
           matches = [m for m in models if m['id']=='openai/gpt-6-astra']
           print(json.dumps({'configured_model_available': bool(matches), 'model_metadata':[{k:m.get(k) for k in ('id','context_length','supported_parameters','pricing')} for m in matches]}))
