@@ -1,36 +1,61 @@
-name: Horizon diagnostics
+name: Horizon release verification
 on:
   push:
     branches: [main]
-    paths: [.github/workflows/horizon_diagnostics.yaml]
+    paths: [.github/workflows/horizon_diagnostics.yaml, horizon-runtime-recovery.bundle]
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  inspect:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    env:
+      HORIZON_BUDGET_MODE: accounting_only
+      HORIZON_RUNTIME_SHA: 4c3c966f2940564df60953cc1918cdd3bc822c55
     steps:
-      - name: Inspect question schema and model availability without forecasting
+      - uses: actions/checkout@v4
+        with:
+          ref: b7f44944891b09b252751307aa113ffaeb86e218
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: recovery-package
+          sparse-checkout: horizon-runtime-recovery.bundle
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Verify release bundle
+        run: |
+          git bundle verify recovery-package/horizon-runtime-recovery.bundle
+          git fetch recovery-package/horizon-runtime-recovery.bundle refs/heads/fix/retry-deadline-20261005
+          git checkout --detach "$HORIZON_RUNTIME_SHA"
+          test "$(git rev-parse HEAD)" = "$HORIZON_RUNTIME_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install httpx==0.28.1
+      - name: Verify categorical, numeric and durable state regressions
+        run: PYTHONPATH=.:tests python -m unittest tests.test_categorical tests.test_numeric tests.test_state_reconciliation tests.test_cloud tests.test_incident_recovery
+      - name: Verify configured model with one real JSON completion
         env:
-          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           python - <<'PY'
-          import json, os, urllib.request, urllib.error
-          def read(url, token=None):
-              headers = {'Authorization': 'Token '+token} if token else {}
+          import asyncio, json
+          from pathlib import Path
+          from horizon.openrouter_provider import OpenRouterProvider
+          async def main():
+              settings=json.loads(Path('configs/openrouter.example.json').read_text())
+              settings.pop('provider')
+              provider=OpenRouterProvider(approved=True, **settings)
               try:
-                  return json.load(urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30))
-              except urllib.error.HTTPError as e:
-                  print(json.dumps({'endpoint':url, 'http_status':e.code, 'error_body':e.read(500).decode('utf-8', errors='replace')}))
-                  return {}
-          def question(q):
-              return {k: q.get(k) for k in ('id','type','status','scheduled_close_time','scheduled_resolve_time','options')} if q else None
-          p = read('https://www.metaculus.com/api/posts/46000/', os.environ['METACULUS_TOKEN'])
-          g = p.get('group_of_questions') or {}
-          c = p.get('conditional') or {}
-          print(json.dumps({'post_id':p.get('id'), 'question':question(p.get('question')), 'group_questions':[question(q) for q in g.get('questions',[])], 'conditional_keys':list(c), 'post_status':p.get('status')}, sort_keys=True))
-          models = read('https://openrouter.ai/api/v1/models')['data']
-          matches = [m for m in models if m['id']=='openai/gpt-6-astra']
-          print(json.dumps({'configured_model_available': bool(matches), 'model_metadata':[{k:m.get(k) for k in ('id','context_length','supported_parameters','pricing')} for m in matches]}))
+                  reply=await provider.complete('Return exactly this JSON object: {"ok":true}')
+                  assert json.loads(reply.text)=={'ok':True}, 'Model JSON check failed'
+                  print(json.dumps({'model_completion':'ok','model':reply.model,'cost_eur':reply.cost_eur}))
+              finally:
+                  await provider.close()
+          asyncio.run(main())
           PY
+
