@@ -26,12 +26,14 @@ concurrency:
 env:
   # Verified recovery runtime; preserve durable submission state.
   HORIZON_BUDGET_MODE: accounting_only
-  HORIZON_RUNTIME_SHA: 933cc5d6f9dfb2b8c36a7d2f8be8348cc1771b23
+  HORIZON_RUNTIME_SHA: cfa1a62cd3390739a64a9303d835c52dd475ab6b
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    outputs:
+      artifact_id: ${{ steps.persist.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,7 +60,7 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install asknews==0.13.11 httpx==0.28.1
       - name: Test durable state and incident recovery
-        run: PYTHONPATH=.:tests python -m unittest tests.test_state_reconciliation tests.test_cloud tests.test_incident_recovery
+        run: PYTHONPATH=.:tests python -m unittest tests.test_state_reconciliation tests.test_cloud tests.test_incident_recovery tests.test_categorical tests.test_numeric
       - name: Check questions and run selected mode
         env:
           GH_TOKEN: ${{ github.token }}
@@ -70,6 +72,7 @@ jobs:
           HORIZON_WATCH_MINUTES: ${{ github.event_name == 'push' && '0' || '240' }}
         run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 360
       - name: Persist operational state even after degraded health
+        id: persist
         if: ${{ always() && hashFiles('work/cloud-export/checkpoint.json') != '' }}
         uses: actions/upload-artifact@v4
         with:
