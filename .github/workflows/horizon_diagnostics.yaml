@@ -38,6 +38,28 @@ jobs:
       - run: python -m pip install httpx==0.28.1
       - name: Verify categorical, numeric and durable state regressions
         run: PYTHONPATH=.:tests python -m unittest tests.test_categorical tests.test_numeric tests.test_state_reconciliation tests.test_cloud tests.test_incident_recovery
+      - name: Diagnose model billing without exposing credentials or balances
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os, httpx
+          headers = {'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']}
+          with httpx.Client(base_url='https://openrouter.ai/api/v1/', headers=headers, timeout=90) as client:
+              key_response = client.get('key')
+              key_response.raise_for_status()
+              data = key_response.json().get('data', {})
+              remaining = data.get('limit_remaining')
+              print(json.dumps({'key_authenticated': True, 'key_limit_exhausted': remaining is not None and remaining <= 0, 'free_tier': data.get('is_free_tier')}))
+              for tokens in (256, 24576):
+                  response = client.post('chat/completions', json={'model':'openai/gpt-6-astra', 'messages':[{'role':'user','content':'Return JSON: {"ok":true}'}], 'max_completion_tokens': tokens, 'response_format':{'type':'json_object'}, 'provider':{'allow_fallbacks':False}})
+                  try:
+                      error = str(response.json().get('error', {}).get('message', '')).lower()
+                  except (ValueError, AttributeError):
+                      error = ''
+                  category = ('key_limit' if 'key' in error and 'limit' in error else 'insufficient_credits' if any(word in error for word in ('credit', 'balance', 'afford')) else 'payment_required' if response.status_code == 402 else 'other_error' if response.is_error else 'ok')
+                  print(json.dumps({'probe_max_tokens':tokens, 'status':response.status_code, 'category':category}))
+          PY
       - name: Verify configured model with one real JSON completion
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
