@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 15
     env:
       HORIZON_BUDGET_MODE: accounting_only
-      HORIZON_RUNTIME_SHA: cfa1a62cd3390739a64a9303d835c52dd475ab6b
+      HORIZON_RUNTIME_SHA: f4e8554d807ed1f5d08e308f4b43ae0977368825
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,7 +29,7 @@ jobs:
       - name: Verify release bundle
         run: |
           git bundle verify recovery-package/horizon-runtime-recovery.bundle
-          git fetch recovery-package/horizon-runtime-recovery.bundle refs/heads/fix/retry-deadline-20261005
+          git fetch recovery-package/horizon-runtime-recovery.bundle refs/heads/fix/operations-20261010
           git checkout --detach "$HORIZON_RUNTIME_SHA"
           test "$(git rev-parse HEAD)" = "$HORIZON_RUNTIME_SHA"
       - uses: actions/setup-python@v5
@@ -37,7 +37,7 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install httpx==0.28.1
       - name: Verify categorical, numeric and durable state regressions
-        run: PYTHONPATH=.:tests python -m unittest tests.test_categorical tests.test_numeric tests.test_state_reconciliation tests.test_cloud tests.test_incident_recovery
+        run: PYTHONPATH=.:tests python -m unittest tests.test_categorical tests.test_numeric tests.test_state_reconciliation tests.test_cloud tests.test_incident_recovery tests.test_openrouter_provider
       - name: Diagnose model billing without exposing credentials or balances
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
