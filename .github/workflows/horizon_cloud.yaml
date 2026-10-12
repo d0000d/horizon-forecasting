@@ -70,6 +70,7 @@ jobs:
 
           config_path = Path("configs/openrouter.example.json")
           config = json.loads(config_path.read_text(encoding="utf-8"))
+          config.pop("reasoning_effort", None)
           config.update({
               "provider": "openai",
               "model": "gpt-6-astra",
