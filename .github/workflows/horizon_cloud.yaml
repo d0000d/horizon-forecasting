@@ -110,12 +110,25 @@ jobs:
           if ("OPENAI_API_KEY" not in source or
                   "headers={'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']}" in source):
               raise SystemExit("OpenAI provider verification patch incomplete.")
-          old = "'--tournament', 'fall-futureeval-2026',"
-          new = "'--tournament', 'bot-testing-area' if mode == 'dry-run' else 'fall-futureeval-2026',"
-          if source.count(old) != 1:
-              raise SystemExit("Could not add isolated dry-run tournament routing.")
-          source = source.replace(old, new)
           cloud.write_text(source, encoding="utf-8")
+
+          runner = Path("horizon/runner.py")
+          source = runner.read_text(encoding="utf-8")
+          start = source.index("async def process_numeric(")
+          end = source.index("
+def preflight(", start)
+          numeric = source[start:end]
+          old = "ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__], 'retryable': type(exc).__name__ in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'ConnectError'}}))"
+          new = "ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__], 'debug_error': str(exc)[:240] if isinstance(exc, ValueError) else None, 'retryable': type(exc).__name__ in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'ConnectError'}}))"
+          if numeric.count(old) != 1:
+              raise SystemExit("Could not add sanitized numeric failure detail.")
+          numeric = numeric.replace(old, new)
+          source = source[:start] + numeric + source[end:]
+          marker = "detail.get('decision_codes', []),"
+          if source.count(marker) != 1:
+              raise SystemExit("Could not expose numeric failure detail.")
+          source = source.replace(marker, marker + " 'debug_error': detail.get('debug_error'),")
+          runner.write_text(source, encoding="utf-8")
 
           PY
       - name: Restore previous operational state
