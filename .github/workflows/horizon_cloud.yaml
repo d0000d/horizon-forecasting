@@ -62,6 +62,28 @@ jobs:
           python-version: '3.11'
       - name: Verify deployed revision
         run: test "$(git rev-parse HEAD)" = "$HORIZON_RUNTIME_SHA"
+      - name: Enforce affordable model call limits and staged state
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config_path = Path("configs/openrouter.example.json")
+          config = json.loads(config_path.read_text(encoding="utf-8"))
+          config["max_output_tokens"] = 2500
+          config["max_input_bytes"] = 16000
+          config["reasoning_effort"] = "low"
+          config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+          runtime = Path("horizon/cloud.py")
+          source = runtime.read_text(encoding="utf-8")
+          old = "if not local and restore:\n        await restore_cloud(state)"
+          new = ("if not local and restore and os.environ.get('HORIZON_STATE_RESTORED') != 'true':\n"
+                 "        await restore_cloud(state)")
+          if source.count(old) != 1:
+              raise SystemExit("Could not install the verified-checkpoint restore gate.")
+          runtime.write_text(source.replace(old, new), encoding="utf-8")
+          PY
       - name: Restore previous operational state
         env:
           GH_TOKEN: ${{ github.token }}
@@ -71,8 +93,12 @@ jobs:
           import json
           import os
           import pathlib
+          import shutil
           import urllib.request
           import zipfile
+          from urllib.error import HTTPError
+          from urllib.parse import urlparse
+          from urllib.request import HTTPRedirectHandler, build_opener
 
           token = os.environ["GH_TOKEN"]
           repo = os.environ["GITHUB_REPOSITORY"]
@@ -105,25 +131,52 @@ jobs:
               )
 
           artifact = max(candidates, key=lambda item: item.get("created_at", ""))
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, response_headers, newurl):
+                  return None
+
           download_url = f"{api}/actions/artifacts/{artifact['id']}/zip"
           request = urllib.request.Request(download_url, headers=headers)
-          with urllib.request.urlopen(request, timeout=60) as response:
-              archive_bytes = response.read()
+          opener = build_opener(NoRedirect())
+          try:
+              with opener.open(request, timeout=60) as response:
+                  archive_bytes = response.read()
+          except HTTPError as response:
+              if response.code not in (301, 302, 303, 307, 308):
+                  raise SystemExit(f"GitHub artifact download failed with HTTP {response.code}.")
+              location = response.headers.get("Location")
+              parsed = urlparse(location or "")
+              if (not location or parsed.scheme != "https" or not parsed.hostname
+                      or parsed.hostname == "api.github.com" or parsed.username or parsed.password):
+                  raise SystemExit("GitHub returned an unsafe artifact download redirect.")
+              # The signed storage URL gets no GitHub Authorization header.
+              with urllib.request.urlopen(urllib.request.Request(location), timeout=60) as response:
+                  archive_bytes = response.read()
 
           destination = pathlib.Path("work/cloud-export").resolve()
           destination.mkdir(parents=True, exist_ok=True)
+          allowed = {"checkpoint.json", "seen.json", "report.json", "budget.sqlite",
+                     "dry-runs.sqlite", "submissions.sqlite"}
+          required = {"checkpoint.json", "seen.json", "budget.sqlite"}
           with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-              for member in archive.infolist():
-                  target = (destination / member.filename).resolve()
-                  if target != destination and destination not in target.parents:
-                      raise SystemExit("Checkpoint artifact contains an unsafe path.")
+              names = archive.namelist()
+              if len(names) != len(set(names)) or not set(names) <= allowed:
+                  raise SystemExit("Checkpoint artifact contains unexpected files.")
+              if not required <= set(names) or sum(item.file_size for item in archive.infolist()) > 20_000_000:
+                  raise SystemExit("Checkpoint artifact is incomplete or oversized.")
+              checkpoint_data = json.loads(archive.read("checkpoint.json"))
+              if checkpoint_data != {"schema": 1,
+                                     "run_id": str(artifact["workflow_run"]["id"]),
+                                     "complete": True}:
+                  raise SystemExit("Checkpoint does not match its source run.")
               archive.extractall(destination)
 
-          checkpoint = destination / "checkpoint.json"
-          if not checkpoint.is_file():
-              raise SystemExit(
-                  "Latest Horizon artifact has no checkpoint.json; refusing to reset state."
-              )
+          state = pathlib.Path("work/cloud")
+          state.mkdir(parents=True, exist_ok=True)
+          for name in allowed - {"checkpoint.json"}:
+              source = destination / name
+              if source.is_file():
+                  shutil.copyfile(source, state / name)
           print(
               f"Restored Horizon checkpoint from artifact {artifact['id']} "
               f"(run {artifact['workflow_run']['id']})."
@@ -154,7 +207,8 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ASKNEWS_API_KEY: ${{ secrets.ASKNEWS_API_KEY }}
           HORIZON_NOTIFY: 'true'
-          HORIZON_MODE: ${{ github.event_name == 'push' && 'publish' || inputs.mode || vars.HORIZON_MODE || 'observe' }}
+          HORIZON_STATE_RESTORED: 'true'
+          HORIZON_MODE: ${{ github.event_name == 'push' && 'observe' || inputs.mode || vars.HORIZON_MODE || 'observe' }}
           HORIZON_WATCH_MINUTES: ${{ github.event_name == 'schedule' && '240' || inputs.watch_minutes || '0' }}
         run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 360
       - name: Persist operational state even after degraded health
