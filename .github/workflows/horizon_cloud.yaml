@@ -117,39 +117,6 @@ jobs:
           source = source.replace(old, new)
           cloud.write_text(source, encoding="utf-8")
 
-          runner = Path("horizon/runner.py")
-          source = runner.read_text(encoding="utf-8")
-          old = "return {'decision': row[0], 'decision_codes': detail.get('decision_codes', [])}"
-          new = ("return {'decision': row[0], 'decision_codes': detail.get('decision_codes', []), "
-                 "'diagnostic_stage': detail.get('diagnostic_stage')}")
-          if source.count(old) != 1:
-              raise SystemExit("Could not expose the sanitized failure stage.")
-          source = source.replace(old, new)
-          start = source.index("async def process_numeric(")
-          end = source.index("\ndef preflight(", start)
-          numeric = source[start:end]
-          changes = [
-              ("    state = 'started'\n    try:\n",
-               "    state = 'started'\n    stage = 'deadline_check'\n    try:\n"),
-              ("        source = await asyncio.wait_for(fetch_research(question), min(60,(cutoff-clock()).total_seconds()))",
-               "        stage = 'asknews_research'\n        source = await asyncio.wait_for(fetch_research(question), min(60,(cutoff-clock()).total_seconds()))"),
-              ("        cdf, explanation = await forecast(council, question, post['question'], source)",
-               "        stage = 'numeric_forecast'\n        cdf, explanation = await forecast(council, question, post['question'], source)"),
-              ("        latest = await api.detail(post['id'])",
-               "        stage = 'publication_recheck'\n        latest = await api.detail(post['id'])"),
-              ("        state = 'submission_uncertain'\n        ledger.set(question.id,state)",
-               "        stage = 'forecast_submission'\n        state = 'submission_uncertain'\n        ledger.set(question.id,state)"),
-              ("        await api.comment(post['id'],explanation)",
-               "        stage = 'private_comment'\n        await api.comment(post['id'],explanation)"),
-              ("        ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__]}))",
-               "        ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__], 'diagnostic_stage':stage}))"),
-          ]
-          for old,new in changes:
-              if numeric.count(old) != 1:
-                  raise SystemExit("Runtime diagnostic patch did not match exactly once: "+old[:40])
-              numeric = numeric.replace(old,new)
-          source = source[:start]+numeric+source[end:]
-          runner.write_text(source, encoding="utf-8")
           PY
       - name: Restore previous operational state
         env:
