@@ -93,23 +93,23 @@ jobs:
 
           cloud = Path("horizon/cloud.py")
           source = cloud.read_text(encoding="utf-8")
-          old = """        response = await client.get('https://openrouter.ai/api/v1/key',
-            headers={'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']})"""
-          new = """        response = await client.get('https://api.openai.com/v1/models',
-            headers={'Authorization': 'Bearer '+os.environ['OPENAI_API_KEY']})"""
-          if source.count(old) != 1:
-              raise SystemExit("Could not switch provider verification to OpenAI.")
-          source = source.replace(old, new)
-          old = "return {'metaculus_bot_id': 308221, 'openrouter': 'authenticated', 'asknews': 'authenticated'}"
-          new = "return {'metaculus_bot_id': 308221, 'openai': 'authenticated', 'asknews': 'authenticated'}"
-          if source.count(old) != 1:
-              raise SystemExit("Could not switch provider health label to OpenAI.")
-          source = source.replace(old, new)
-          old = "('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY')"
-          new = "('METACULUS_TOKEN', 'OPENAI_API_KEY', 'ASKNEWS_API_KEY')"
-          if source.count(old) != 1:
-              raise SystemExit("Could not switch provider credential preflight to OpenAI.")
-          source = source.replace(old, new)
+          endpoint_old = "https://openrouter.ai/api/v1/key"
+          endpoint_new = "https://api.openai.com/v1/models"
+          if endpoint_old in source:
+              source = source.replace(endpoint_old, endpoint_new)
+          elif endpoint_new not in source:
+              raise SystemExit("Provider verification endpoint not recognized.")
+          source = source.replace(
+              "headers={'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']}",
+              "headers={'Authorization': 'Bearer '+os.environ['OPENAI_API_KEY']}")
+          source = source.replace(
+              "'openrouter': 'authenticated'", "'openai': 'authenticated'")
+          source = source.replace(
+              "('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY')",
+              "('METACULUS_TOKEN', 'OPENAI_API_KEY', 'ASKNEWS_API_KEY')")
+          if ("OPENAI_API_KEY" not in source or
+                  "headers={'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']}" in source):
+              raise SystemExit("OpenAI provider verification patch incomplete.")
           old = "'--tournament', 'fall-futureeval-2026',"
           new = "'--tournament', 'bot-testing-area' if mode == 'dry-run' else 'fall-futureeval-2026',"
           if source.count(old) != 1:
