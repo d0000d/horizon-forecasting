@@ -114,12 +114,9 @@ jobs:
 
           cloud = Path("horizon/cloud.py")
           source = cloud.read_text(encoding="utf-8")
-          old = """if result.returncode != 0:
-                  report['blocked'].append('Forecast runner failed: exit '+str(result.returncode))"""
-          new = """if result.returncode != 0:
-                  tail = next((line.strip() for line in reversed((result.stderr or '').splitlines()) if line.strip()), '')
-                  report['blocked'].append('Forecast runner failed: exit '+str(result.returncode)
-                                          + (': '+tail[:200] if tail else ''))"""
+          old = "report['blocked'].append('Forecast runner failed: exit '+str(result.returncode))"
+          new = ("tail = next((line.strip() for line in reversed((result.stderr or '').splitlines()) if line.strip()), '')\n"
+                 + "                report['blocked'].append('Forecast runner failed: exit '+str(result.returncode) + (': '+tail[:200] if tail else ''))")
           if source.count(old) != 1:
               raise SystemExit("Could not expose concise runner failure detail.")
           cloud.write_text(source.replace(old, new), encoding="utf-8")
