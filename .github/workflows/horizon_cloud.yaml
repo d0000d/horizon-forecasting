@@ -78,7 +78,6 @@ jobs:
               "eur_per_usd_upper_bound": 1.2,
               "max_output_tokens": 2500,
               "max_input_bytes": 16000,
-              "reasoning_effort": "low",
           })
           config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
