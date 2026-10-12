@@ -70,9 +70,16 @@ jobs:
 
           config_path = Path("configs/openrouter.example.json")
           config = json.loads(config_path.read_text(encoding="utf-8"))
-          config["max_output_tokens"] = 2500
-          config["max_input_bytes"] = 16000
-          config["reasoning_effort"] = "low"
+          config.update({
+              "provider": "openai",
+              "model": "gpt-6-astra",
+              "input_usd_per_million": 10,
+              "output_usd_per_million": 50,
+              "eur_per_usd_upper_bound": 1.2,
+              "max_output_tokens": 2500,
+              "max_input_bytes": 16000,
+              "reasoning_effort": "low",
+          })
           config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
           runtime = Path("horizon/cloud.py")
@@ -83,6 +90,66 @@ jobs:
           if source.count(old) != 1:
               raise SystemExit("Could not install the verified-checkpoint restore gate.")
           runtime.write_text(source.replace(old, new), encoding="utf-8")
+
+          cloud = Path("horizon/cloud.py")
+          source = cloud.read_text(encoding="utf-8")
+          old = """        response = await client.get('https://openrouter.ai/api/v1/key',
+            headers={'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']})"""
+          new = """        response = await client.get('https://api.openai.com/v1/models',
+            headers={'Authorization': 'Bearer '+os.environ['OPENAI_API_KEY']})"""
+          if source.count(old) != 1:
+              raise SystemExit("Could not switch provider verification to OpenAI.")
+          source = source.replace(old, new)
+          old = "return {'metaculus_bot_id': 308221, 'openrouter': 'authenticated', 'asknews': 'authenticated'}"
+          new = "return {'metaculus_bot_id': 308221, 'openai': 'authenticated', 'asknews': 'authenticated'}"
+          if source.count(old) != 1:
+              raise SystemExit("Could not switch provider health label to OpenAI.")
+          source = source.replace(old, new)
+          old = "('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY')"
+          new = "('METACULUS_TOKEN', 'OPENAI_API_KEY', 'ASKNEWS_API_KEY')"
+          if source.count(old) != 1:
+              raise SystemExit("Could not switch provider credential preflight to OpenAI.")
+          source = source.replace(old, new)
+          old = "'--tournament', 'fall-futureeval-2026',"
+          new = "'--tournament', 'bot-testing-area' if mode == 'dry-run' else 'fall-futureeval-2026',"
+          if source.count(old) != 1:
+              raise SystemExit("Could not add isolated dry-run tournament routing.")
+          source = source.replace(old, new)
+          cloud.write_text(source, encoding="utf-8")
+
+          runner = Path("horizon/runner.py")
+          source = runner.read_text(encoding="utf-8")
+          old = "return {'decision': row[0], 'decision_codes': detail.get('decision_codes', [])}"
+          new = ("return {'decision': row[0], 'decision_codes': detail.get('decision_codes', []), "
+                 "'diagnostic_stage': detail.get('diagnostic_stage')}")
+          if source.count(old) != 1:
+              raise SystemExit("Could not expose the sanitized failure stage.")
+          source = source.replace(old, new)
+          start = source.index("async def process_numeric(")
+          end = source.index("\ndef preflight(", start)
+          numeric = source[start:end]
+          changes = [
+              ("    state = 'started'\n    try:\n",
+               "    state = 'started'\n    stage = 'deadline_check'\n    try:\n"),
+              ("        source = await asyncio.wait_for(fetch_research(question), min(60,(cutoff-clock()).total_seconds()))",
+               "        stage = 'asknews_research'\n        source = await asyncio.wait_for(fetch_research(question), min(60,(cutoff-clock()).total_seconds()))"),
+              ("        cdf, explanation = await forecast(council, question, post['question'], source)",
+               "        stage = 'numeric_forecast'\n        cdf, explanation = await forecast(council, question, post['question'], source)"),
+              ("        latest = await api.detail(post['id'])",
+               "        stage = 'publication_recheck'\n        latest = await api.detail(post['id'])"),
+              ("        state = 'submission_uncertain'\n        ledger.set(question.id,state)",
+               "        stage = 'forecast_submission'\n        state = 'submission_uncertain'\n        ledger.set(question.id,state)"),
+              ("        await api.comment(post['id'],explanation)",
+               "        stage = 'private_comment'\n        await api.comment(post['id'],explanation)"),
+              ("        ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__]}))",
+               "        ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__], 'diagnostic_stage':stage}))"),
+          ]
+          for old,new in changes:
+              if numeric.count(old) != 1:
+                  raise SystemExit("Runtime diagnostic patch did not match exactly once: "+old[:40])
+              numeric = numeric.replace(old,new)
+          source = source[:start]+numeric+source[end:]
+          runner.write_text(source, encoding="utf-8")
           PY
       - name: Restore previous operational state
         env:
@@ -204,7 +271,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ASKNEWS_API_KEY: ${{ secrets.ASKNEWS_API_KEY }}
           HORIZON_NOTIFY: 'true'
           HORIZON_STATE_RESTORED: 'true'
