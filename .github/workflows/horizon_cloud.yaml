@@ -126,7 +126,7 @@ jobs:
           end = source.index("\ndef preflight(", start)
           numeric = source[start:end]
           old = "ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__], 'retryable': type(exc).__name__ in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'ConnectError'}}))"
-          new = "ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__], 'debug_error': str(exc)[:240] if isinstance(exc, ValueError) else None, 'retryable': type(exc).__name__ in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'ConnectError'}}))"
+          new = "ledger.set(question.id,state,json.dumps({'decision_codes':[type(exc).__name__], 'debug_error': str(exc)[:240] if isinstance(exc, ValueError) else None, 'retryable': type(exc).__name__ in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'ConnectError'} or isinstance(exc, ValueError)}))"
           if numeric.count(old) != 1:
               raise SystemExit("Could not add sanitized numeric failure detail.")
           numeric = numeric.replace(old, new)
