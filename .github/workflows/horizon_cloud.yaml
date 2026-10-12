@@ -254,7 +254,7 @@ jobs:
               raise SystemExit("watch_minutes must be an integer from 0 to 20")
           PY
       - name: Install runtime dependencies
-        run: python -m pip install asknews==0.13.11 httpx==0.28.1
+        run: python -m pip install asknews==0.13.11 httpx==0.28.1 openai
       - name: Test durable state and incident recovery
         run: |
           PYTHONPATH=.:tests python - <<'PY'
