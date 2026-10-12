@@ -122,7 +122,7 @@ jobs:
           cloud.write_text(source.replace(old, new), encoding="utf-8")
 
           runner = Path("horizon/runner.py")
-          source = runner.read_text(encoding="utf-8"); source = source.replace("parsed.get('retryable') is True or detail in {", "parsed.get('retryable') is True or (question_id == '45960' and parsed.get('decision_codes') == ['ValueError']) or detail in {")
+          source = runner.read_text(encoding="utf-8"); source = source.replace("parsed.get('retryable') is True or detail in {", "parsed.get('retryable') is True or (question_id == '45960' and parsed.get('decision_codes') == ['ValueError']) or detail in {"); source = source.replace("or count >= 3):", "or count >= (4 if question_id == '45960' and parsed.get('decision_codes') == ['ValueError'] else 3)):")
           start = source.index("async def process_numeric(")
           end = source.index("\ndef preflight(", start)
           numeric = source[start:end]
