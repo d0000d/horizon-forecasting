@@ -279,7 +279,7 @@ jobs:
               for test in suite:
                   if isinstance(test, unittest.TestSuite):
                       yield from selected(test)
-                  else
+                  else:
                       yield test
           result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(selected(loaded)))
           raise SystemExit(not result.wasSuccessful())
