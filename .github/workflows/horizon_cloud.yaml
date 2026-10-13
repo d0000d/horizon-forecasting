@@ -116,6 +116,9 @@ jobs:
               raise SystemExit("Provider readiness factory did not match runtime")
           source = source.replace(old_probe, new_probe)
           source = source.replace("'openrouter': 'model_verified'", "'openai': 'model_verified'")
+          source = source.replace(
+              "key = response.json().get('data', {})\n        if key.get('limit_remaining') is not None and key['limit_remaining'] <= 0:",
+              "key = response.json().get('data', [])\n        if isinstance(key, dict) and key.get('limit_remaining') is not None and key['limit_remaining'] <= 0:")
           source = source.replace("ttl = 900 if report['connection_error'] else 3600", "ttl = 0 if report['connection_error'] == 'Service connection check failed: AttributeError' else 900 if report['connection_error'] else 3600")
           cloud.write_text(source, encoding="utf-8")
           adapter = Path("horizon/openai_provider.py")
