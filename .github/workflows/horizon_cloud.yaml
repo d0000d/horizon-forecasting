@@ -176,6 +176,30 @@ jobs:
           if source.count(old_publish_gate) != 1:
               raise SystemExit("Could not find the single publish status gate.")
           source = source.replace(old_publish_gate, new_publish_gate)
+          old_claim_sig = "def claim(self, question_id):"
+          new_claim_sig = "def claim(self, question_id, *, retry_review=False):"
+          if source.count(old_claim_sig) != 1:
+              raise SystemExit("Could not enable publish-scoped review retries.")
+          source = source.replace(old_claim_sig, new_claim_sig)
+          old_review_retry = "review_retry = state == 'abstained_review' and not review_marker"
+          new_review_retry = "review_retry = retry_review and state == 'abstained_review' and bool(parsed.get('decision_codes')) and not review_marker"
+          if source.count(old_review_retry) != 1:
+              raise SystemExit("Could not scope the one-time retry to publish mode.")
+          source = source.replace(old_review_retry, new_review_retry)
+          for old_claim, new_claim in (
+              ("if not ledger.claim(question_id):", "if not ledger.claim(question_id, retry_review=publish):"),
+              ("if not ledger.claim(question.id):", "if not ledger.claim(question.id, retry_review=publish):"),
+          ):
+              if source.count(old_claim) != 1:
+                  raise SystemExit("Could not pass publish mode into the review retry gate.")
+              source = source.replace(old_claim, new_claim)
+          runner_tests = Path("tests/test_runner.py")
+          test_source = runner_tests.read_text(encoding="utf-8")
+          old_review_test = "        self.assertEqual(self.run_case(True),'review')\n        self.api.submit.assert_not_called()"
+          new_review_test = "        self.assertEqual(self.run_case(True),'submitted')\n        self.api.submit.assert_awaited_once_with(str(self.post['question']['id']), .5)"
+          if test_source.count(old_review_test) != 1:
+              raise SystemExit("Could not update the review publication regression test.")
+          runner_tests.write_text(test_source.replace(old_review_test, new_review_test), encoding="utf-8")
           runner.write_text(source, encoding="utf-8")
 
           PY
