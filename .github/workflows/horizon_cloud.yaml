@@ -195,8 +195,13 @@ jobs:
               source = source.replace(old_claim, new_claim)
           runner_tests = Path("tests/test_runner.py")
           test_source = runner_tests.read_text(encoding="utf-8")
-          old_review_test = "        self.assertEqual(self.run_case(True),'review')\n        self.api.submit.assert_not_called()"
-          new_review_test = "        self.assertEqual(self.run_case(True),'submitted')\n        self.api.submit.assert_awaited_once_with(str(self.post['question']['id']), .5)"
+          old_review_test = "        self.assertEqual(self.run_case(True),'review')
+        self.api.submit.assert_not_called()"
+          new_review_test = "        self.assertEqual(self.run_case(True),'submitted')
+        self.api.submit.assert_awaited_once()
+        submitted_probability = self.api.submit.call_args.args[1]
+        self.assertGreaterEqual(submitted_probability, 0)
+        self.assertLessEqual(submitted_probability, 1)"
           if test_source.count(old_review_test) != 1:
               raise SystemExit("Could not update the review publication regression test.")
           runner_tests.write_text(test_source.replace(old_review_test, new_review_test), encoding="utf-8")
