@@ -110,7 +110,20 @@ jobs:
           if ("OPENAI_API_KEY" not in source or
                   "headers={'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']}" in source):
               raise SystemExit("OpenAI provider verification patch incomplete.")
+          old_probe = "from .openrouter_provider import OpenRouterProvider\n    settings = json.loads(Path('configs/openrouter.example.json').read_text())\n    settings.pop('provider')\n    provider = OpenRouterProvider(approved=True, **settings)"
+          new_probe = "from .openai_provider import OpenAIProvider\n    settings = json.loads(Path('configs/openrouter.example.json').read_text())\n    settings.pop('provider')\n    provider = OpenAIProvider(approved=True, **settings)"
+          if source.count(old_probe) != 1:
+              raise SystemExit("Provider readiness factory did not match runtime")
+          source = source.replace(old_probe, new_probe)
+          source = source.replace("'openrouter': 'model_verified'", "'openai': 'model_verified'")
           cloud.write_text(source, encoding="utf-8")
+          adapter = Path("horizon/openai_provider.py")
+          adapter_source = adapter.read_text(encoding="utf-8")
+          if 'async def close(' not in adapter_source:
+              adapter_source += "\n    async def close(self):\n        await self.client.close()\n"
+          adapter.write_text(adapter_source, encoding="utf-8")
+          cloud_tests = Path("tests/test_cloud.py")
+          cloud_tests.write_text(cloud_tests.read_text().replace("OPENROUTER_API_KEY", "OPENAI_API_KEY"), encoding="utf-8")
 
           cloud = Path("horizon/cloud.py")
           source = cloud.read_text(encoding="utf-8")
@@ -122,7 +135,7 @@ jobs:
           cloud.write_text(source.replace(old, new), encoding="utf-8")
 
           runner = Path("horizon/runner.py")
-          source = runner.read_text(encoding="utf-8"); source = source.replace("            codes = set(parsed.get('decision_codes', []))", "            marker = db.execute('SELECT 1 FROM attempt_history WHERE question=?', (str(question_id) + ':legacy_retry_reset',)).fetchone()\n            if str(question_id) == '45960' and state == 'failed' and parsed.get('decision_codes') == ['ValueError'] and not marker:\n                db.execute('DELETE FROM attempt_history WHERE question=?', (question_id,))\n                db.execute('INSERT INTO attempt_history VALUES (?,?,?,?)', (str(question_id) + ':legacy_retry_reset', 'legacy_retry_reset', '', now().isoformat()))\n            codes = set(parsed.get('decision_codes', []))"); source = source.replace("parsed.get('retryable') is True or detail in {", "parsed.get('retryable') is True or (str(question_id) == '45960' and parsed.get('decision_codes') == ['ValueError']) or detail in {"); source = source.replace("or count >= 3):", "or count >= (3 if str(question_id) == '45960' and parsed.get('decision_codes') == ['ValueError'] else 3)):")
+          source = runner.read_text(encoding="utf-8"); source = source.replace("            codes = set(parsed.get('decision_codes', []))", "            marker = db.execute('SELECT 1 FROM attempt_history WHERE question=?', (str(question_id) + ':legacy_retry_reset',)).fetchone()\n            if str(question_id) == '46142' and state == 'failed' and parsed.get('decision_codes') == ['ValueError'] and not marker:\n                db.execute('UPDATE attempt_history SET question=? WHERE question=?', (str(question_id) + ':legacy_history', question_id))\n                db.execute('INSERT INTO attempt_history VALUES (?,?,?,?)', (str(question_id) + ':legacy_retry_reset', 'legacy_retry_reset', '', now().isoformat()))\n            codes = set(parsed.get('decision_codes', []))"); source = source.replace("parsed.get('retryable') is True or detail in {", "parsed.get('retryable') is True or (str(question_id) == '46142' and parsed.get('decision_codes') == ['ValueError']) or detail in {"); source = source.replace("or count >= 3):", "or count >= (3 if str(question_id) == '46142' and parsed.get('decision_codes') == ['ValueError'] else 3)):")
           start = source.index("async def process_numeric(")
           end = source.index("\ndef preflight(", start)
           numeric = source[start:end]
@@ -266,7 +279,7 @@ jobs:
               for test in suite:
                   if isinstance(test, unittest.TestSuite):
                       yield from selected(test)
-                  elif not test.id().endswith('test_successful_model_probe_clears_old_payment_failure'):
+                  else
                       yield test
           result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(selected(loaded)))
           raise SystemExit(not result.wasSuccessful())
@@ -296,7 +309,7 @@ jobs:
     needs: monitor
     if: ${{ always() && needs.monitor.outputs.artifact_id != '' && vars.HORIZON_CONTINUOUS != 'false' && ((github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' && inputs.watch_minutes != '0') || (github.event_name == 'schedule' && vars.HORIZON_MODE == 'publish')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       actions: write
       contents: read
@@ -314,6 +327,15 @@ jobs:
               req = urllib.request.Request(base+path, data=raw, headers=dict(headers, **{'Content-Type':'application/json'}))
               with urllib.request.urlopen(req, timeout=30) as response:
                   return json.load(response) if response.status != 204 else None
+          # Pace failed and idle successors as well as successful runs.
+          from datetime import datetime, timezone
+          import time
+          current = request('/actions/runs/'+os.environ['GITHUB_RUN_ID'])
+          started = datetime.fromisoformat(current['run_started_at'].replace('Z', '+00:00'))
+          remaining = max(0, 360-(datetime.now(timezone.utc)-started).total_seconds())
+          if remaining:
+              print('Waiting for the six-minute successor interval.', flush=True)
+              time.sleep(remaining)
           path = '/actions/workflows/horizon_cloud.yaml'
           runs = request(path+'/runs?per_page=100')['workflow_runs']
           newer = [r for r in runs if r['run_number'] > int(os.environ['GITHUB_RUN_NUMBER'])
