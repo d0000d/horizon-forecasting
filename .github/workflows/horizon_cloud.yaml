@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths: [.github/workflows/horizon_cloud.yaml]
   schedule:
-    - cron: '*/6 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -177,8 +177,18 @@ jobs:
                           or detail in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'ConnectError'})
                       technical |= state == 'abstain' and parsed.get('retryable') is True
                       payment_blocked = state == 'blocked_payment'
-                      if not payment_blocked and (not (technical or legacy_stop) or count >= 3):
+                      if not payment_blocked and not (technical or legacy_stop):
                           return False
+                      if not payment_blocked and count >= 3:
+                          latest = db.execute('SELECT * FROM attempt_history WHERE question=? ORDER BY rowid DESC LIMIT 1',
+                                              (question_id,)).fetchone()
+                          try:
+                              last_attempt = datetime.fromisoformat(latest[3])
+                              cooldown = min(3600, 60 * 2 ** min(count - 3, 6))
+                              if (now() - last_attempt).total_seconds() < cooldown:
+                                  return False
+                          except (IndexError, TypeError, ValueError):
+                              return False
                       db.execute('INSERT INTO attempt_history VALUES (?,?,?,?)',
                                  (question_id, state, detail, now().isoformat()))
                       db.execute('UPDATE submissions SET state=?,detail=? WHERE question=?',
@@ -352,9 +362,9 @@ jobs:
           ASKNEWS_API_KEY: ${{ secrets.ASKNEWS_API_KEY }}
           HORIZON_NOTIFY: 'true'
           HORIZON_STATE_RESTORED: 'true'
-          HORIZON_MODE: ${{ github.event_name == 'push' && 'observe' || inputs.mode || vars.HORIZON_MODE || 'observe' }}
-          HORIZON_WATCH_MINUTES: ${{ github.event_name == 'schedule' && '240' || inputs.watch_minutes || '0' }}
-        run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 360
+          HORIZON_MODE: ${{ github.event_name == 'push' && 'observe' || (github.event_name == 'schedule' && (vars.HORIZON_MODE || 'publish')) || inputs.mode || vars.HORIZON_MODE || 'observe' }}
+          HORIZON_WATCH_MINUTES: ${{ github.event_name == 'schedule' && '0' || inputs.watch_minutes || '0' }}
+        run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 60
       - name: Persist operational state even after degraded health
         id: persist
         if: ${{ always() && hashFiles('work/cloud-export/checkpoint.json') != '' }}
@@ -367,7 +377,7 @@ jobs:
 
   continue_monitor:
     needs: monitor
-    if: ${{ always() && needs.monitor.outputs.artifact_id != '' && vars.HORIZON_CONTINUOUS != 'false' && ((github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' && inputs.watch_minutes != '0') || (github.event_name == 'schedule' && vars.HORIZON_MODE == 'publish')) }}
+    if: ${{ always() && needs.monitor.outputs.artifact_id != '' && vars.HORIZON_CONTINUOUS != 'false' && ((github.event_name == 'workflow_dispatch' && inputs.mode == 'publish') || (github.event_name == 'schedule' && (vars.HORIZON_MODE == 'publish' || vars.HORIZON_MODE == ''))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -392,9 +402,9 @@ jobs:
           import time
           current = request('/actions/runs/'+os.environ['GITHUB_RUN_ID'])
           started = datetime.fromisoformat(current['run_started_at'].replace('Z', '+00:00'))
-          remaining = max(0, 360-(datetime.now(timezone.utc)-started).total_seconds())
+          remaining = max(0, 60-(datetime.now(timezone.utc)-started).total_seconds())
           if remaining:
-              print('Waiting for the six-minute successor interval.', flush=True)
+              print('Waiting for the one-minute successor interval.', flush=True)
               time.sleep(remaining)
           path = '/actions/workflows/horizon_cloud.yaml'
           runs = request(path+'/runs?per_page=100')['workflow_runs']
@@ -403,6 +413,6 @@ jobs:
           if newer:
               print('A successor is already queued or running.')
           else:
-              request(path+'/dispatches', {'ref':'main','inputs':{'mode':'publish','watch_minutes':'20'}})
+              request(path+'/dispatches', {'ref':'main','inputs':{'mode':'publish','watch_minutes':'0'}})
               print('Successor requested after confirmed state upload.')
           PY
