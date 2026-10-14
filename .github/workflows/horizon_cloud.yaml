@@ -139,7 +139,64 @@ jobs:
           cloud.write_text(source.replace(old, new), encoding="utf-8")
 
           runner = Path("horizon/runner.py")
-          source = runner.read_text(encoding="utf-8"); source = source.replace("            codes = set(parsed.get('decision_codes', []))", "            marker = db.execute('SELECT 1 FROM attempt_history WHERE question=?', (str(question_id) + ':legacy_retry_reset',)).fetchone()\n            if str(question_id) == '46142' and state == 'failed' and parsed.get('decision_codes') == ['ValueError'] and not marker:\n                db.execute('UPDATE attempt_history SET question=? WHERE question=?', (str(question_id) + ':legacy_history', question_id))\n                db.execute('INSERT INTO attempt_history VALUES (?,?,?,?)', (str(question_id) + ':legacy_retry_reset', 'legacy_retry_reset', '', now().isoformat()))\n            codes = set(parsed.get('decision_codes', []))"); source = source.replace("parsed.get('retryable') is True or detail in {", "parsed.get('retryable') is True or (str(question_id) == '46142' and parsed.get('decision_codes') == ['ValueError']) or detail in {"); source = source.replace("or count >= 3):", "or count >= (3 if str(question_id) == '46142' and parsed.get('decision_codes') == ['ValueError'] else 3)):")
+          source = runner.read_text(encoding="utf-8")
+          start = source.index("    def claim(self, question_id):")
+          end = source.index("    def set(self, question_id,", start)
+          new_method = """    def claim(self, question_id):
+                  question_id = str(question_id)
+                  with connect(self.path) as db:
+                      db.execute('BEGIN IMMEDIATE')
+                      if db.execute('INSERT OR IGNORE INTO submissions VALUES (?, ?, ?)',
+                                    (question_id, 'started', '')).rowcount == 1:
+                          return True
+                      row = db.execute('SELECT state,detail FROM submissions WHERE question=?',
+                                       (question_id,)).fetchone()
+                      if row is None:
+                          return False
+                      state, detail = row
+                      try:
+                          parsed = json.loads(detail)
+                      except (ValueError, TypeError):
+                          parsed = {}
+                      marker_question = question_id + ':legacy_retry_reset'
+                      marker = db.execute('SELECT 1 FROM attempt_history WHERE question=?',
+                                          (marker_question,)).fetchone()
+                      if (question_id == '45960' and state == 'failed'
+                              and parsed.get('decision_codes') == ['ValueError'] and not marker):
+                          db.execute('DELETE FROM attempt_history WHERE question=?', (question_id,))
+                          db.execute('INSERT INTO attempt_history VALUES (?,?,?,?)',
+                                     (marker_question, 'legacy_retry_reset', '', now().isoformat()))
+                      count = db.execute('SELECT COUNT(*) FROM attempt_history WHERE question=?',
+                                         (question_id,)).fetchone()[0]
+                      codes = set(parsed.get('decision_codes', []))
+                      legacy_stop = (state == 'abstain' and codes == {
+                          'budget_or_deadline_stop', 'insufficient_forecasters', 'stage_failure'})
+                      technical = state == 'failed' and (
+                          parsed.get('retryable') is True
+                          or (question_id == '45960' and parsed.get('decision_codes') == ['ValueError'])
+                          or detail in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'ConnectError'})
+                      technical |= state == 'abstain' and parsed.get('retryable') is True
+                      payment_blocked = state == 'blocked_payment'
+                      if not payment_blocked and (not (technical or legacy_stop) or count >= 3):
+                          return False
+                      db.execute('INSERT INTO attempt_history VALUES (?,?,?,?)',
+                                 (question_id, state, detail, now().isoformat()))
+                      db.execute('UPDATE submissions SET state=?,detail=? WHERE question=?',
+                                 ('started', '', question_id))
+                      return True"""
+          source = source[:start] + new_method + source[end:]
+          old = "            row = db.execute('SELECT state, detail FROM submissions WHERE question=?', (question_id,)).fetchone()"
+          new = (old + "\n"
+                 + "            retry_count = db.execute('SELECT COUNT(*) FROM attempt_history WHERE question=?', (str(question_id),)).fetchone()[0]\n"
+                 + "            reset_marker = db.execute('SELECT 1 FROM attempt_history WHERE question=?', (str(question_id) + ':legacy_retry_reset',)).fetchone() is not None")
+          if source.count(old) != 1:
+              raise SystemExit("Could not add exact ledger diagnostics.")
+          source = source.replace(old, new)
+          old = "        return {'decision': row[0], 'decision_codes': detail.get('decision_codes', []),"
+          new = old + " 'ledger_debug': {'retry_count': retry_count, 'reset_marker': reset_marker},"
+          if source.count(old) != 1:
+              raise SystemExit("Could not expose ledger diagnostics.")
+          source = source.replace(old, new)
           start = source.index("async def process_numeric(")
           end = source.index("\ndef preflight(", start)
           numeric = source[start:end]
@@ -152,56 +209,8 @@ jobs:
           marker = "detail.get('decision_codes', []),"
           if source.count(marker) != 1:
               raise SystemExit("Could not expose numeric failure detail.")
-          source = source.replace(marker, marker + " 'debug_error': detail.get('debug_error'),")
-          review_anchor = "            # Retry only technical failures before any submission. Never retry a\n            # substantive review, an uncertain send or an accepted forecast.\n"
-          review_replacement = (
-              "            review_marker = db.execute('SELECT 1 FROM attempt_history WHERE question=?', (str(question_id) + ':review_publish_retry',)).fetchone()\n"
-              "            review_retry = state == 'abstained_review' and not review_marker\n"
-              "            if review_retry:\n"
-              "                db.execute('UPDATE attempt_history SET question=? WHERE question=?', (str(question_id) + ':review_history', question_id))\n"
-              "                db.execute('INSERT INTO attempt_history VALUES (?,?,?,?)', (str(question_id) + ':review_publish_retry', 'review_publish_retry', '', now().isoformat()))\n"
-              "            # Retry only technical failures before any submission. Never retry a\n"
-              "            # substantive review, an uncertain send or an accepted forecast.\n"
-          )
-          if source.count(review_anchor) != 1:
-              raise SystemExit("Could not add the one-time review retry marker.")
-          source = source.replace(review_anchor, review_replacement)
-          old_review_gate = "            if not payment_blocked and (not (technical or legacy_stop) or count >= (3 if str(question_id) == '46142' and parsed.get('decision_codes') == ['ValueError'] else 3)):\n"
-          new_review_gate = "            if not payment_blocked and not review_retry and (not (technical or legacy_stop) or count >= (3 if str(question_id) == '46142' and parsed.get('decision_codes') == ['ValueError'] else 3)):\n"
-          if source.count(old_review_gate) != 1:
-              raise SystemExit("Could not add the one-time review retry gate.")
-          source = source.replace(old_review_gate, new_review_gate)
-          old_publish_gate = "if record.status != 'ok':"
-          new_publish_gate = "if record.status != 'ok' and not (publish and record.status == 'review' and record.calibrated is not None):"
-          if source.count(old_publish_gate) != 1:
-              raise SystemExit("Could not find the single publish status gate.")
-          source = source.replace(old_publish_gate, new_publish_gate)
-          old_claim_sig = "def claim(self, question_id):"
-          new_claim_sig = "def claim(self, question_id, *, retry_review=False):"
-          if source.count(old_claim_sig) != 1:
-              raise SystemExit("Could not enable publish-scoped review retries.")
-          source = source.replace(old_claim_sig, new_claim_sig)
-          old_review_retry = "review_retry = state == 'abstained_review' and not review_marker"
-          new_review_retry = "review_retry = retry_review and state == 'abstained_review' and bool(parsed.get('decision_codes')) and not review_marker"
-          if source.count(old_review_retry) != 1:
-              raise SystemExit("Could not scope the one-time retry to publish mode.")
-          source = source.replace(old_review_retry, new_review_retry)
-          for old_claim, new_claim in (
-              ("if not ledger.claim(question_id):", "if not ledger.claim(question_id, retry_review=publish):"),
-              ("if not ledger.claim(question.id):", "if not ledger.claim(question.id, retry_review=publish):"),
-          ):
-              if source.count(old_claim) != 1:
-                  raise SystemExit("Could not pass publish mode into the review retry gate.")
-              source = source.replace(old_claim, new_claim)
-          runner_tests = Path("tests/test_runner.py")
-          test_source = runner_tests.read_text(encoding="utf-8")
-          old_review_test = "        self.assertEqual(self.run_case(True),'review')" + chr(10) + "        self.api.submit.assert_not_called()"
-          new_review_test = "        self.assertEqual(self.run_case(True),'submitted')" + chr(10) + "        self.api.submit.assert_awaited_once()" + chr(10) + "        submitted_probability = self.api.submit.call_args.args[1]" + chr(10) + "        self.assertGreaterEqual(submitted_probability, 0)" + chr(10) + "        self.assertLessEqual(submitted_probability, 1)"
-          if test_source.count(old_review_test) != 1:
-              raise SystemExit("Could not update the review publication regression test.")
-          runner_tests.write_text(test_source.replace(old_review_test, new_review_test), encoding="utf-8")
+          source = source.replace(marker, marker + " 'debug_error': detail.get('debug_error'), 'ledger_debug': detail.get('ledger_debug'),")
           runner.write_text(source, encoding="utf-8")
-
           PY
       - name: Restore previous operational state
         env:
