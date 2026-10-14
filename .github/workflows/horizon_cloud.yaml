@@ -184,7 +184,7 @@ jobs:
                       db.execute('UPDATE submissions SET state=?,detail=? WHERE question=?',
                                  ('started', '', question_id))
                       return True"""
-          source = source[:start] + new_method + source[end:]
+          source = source[:start] + new_method + "\n" + source[end:]
           old = "            row = db.execute('SELECT state, detail FROM submissions WHERE question=?', (question_id,)).fetchone()"
           new = (old + "\n"
                  + "            retry_count = db.execute('SELECT COUNT(*) FROM attempt_history WHERE question=?', (str(question_id),)).fetchone()[0]\n"
