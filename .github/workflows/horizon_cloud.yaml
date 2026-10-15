@@ -72,8 +72,8 @@ jobs:
           config = json.loads(config_path.read_text(encoding="utf-8"))
           config.pop("reasoning_effort", None)
           config.update({
-              "provider": "openai",
-              "model": "gpt-6-astra",
+              "provider": "openrouter",
+              "model": "openai/gpt-6-astra",
               "input_usd_per_million": 10,
               "output_usd_per_million": 50,
               "eur_per_usd_upper_bound": 1.2,
@@ -91,43 +91,7 @@ jobs:
               raise SystemExit("Could not install the verified-checkpoint restore gate.")
           runtime.write_text(source.replace(old, new), encoding="utf-8")
 
-          cloud = Path("horizon/cloud.py")
-          source = cloud.read_text(encoding="utf-8")
-          endpoint_old = "https://openrouter.ai/api/v1/key"
-          endpoint_new = "https://api.openai.com/v1/models"
-          if endpoint_old in source:
-              source = source.replace(endpoint_old, endpoint_new)
-          elif endpoint_new not in source:
-              raise SystemExit("Provider verification endpoint not recognized.")
-          source = source.replace(
-              "headers={'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']}",
-              "headers={'Authorization': 'Bearer '+os.environ['OPENAI_API_KEY']}")
-          source = source.replace(
-              "'openrouter': 'authenticated'", "'openai': 'authenticated'")
-          source = source.replace(
-              "('METACULUS_TOKEN', 'OPENROUTER_API_KEY', 'ASKNEWS_API_KEY')",
-              "('METACULUS_TOKEN', 'OPENAI_API_KEY', 'ASKNEWS_API_KEY')")
-          if ("OPENAI_API_KEY" not in source or
-                  "headers={'Authorization': 'Bearer '+os.environ['OPENROUTER_API_KEY']}" in source):
-              raise SystemExit("OpenAI provider verification patch incomplete.")
-          old_probe = "from .openrouter_provider import OpenRouterProvider\n    settings = json.loads(Path('configs/openrouter.example.json').read_text())\n    settings.pop('provider')\n    provider = OpenRouterProvider(approved=True, **settings)"
-          new_probe = "from .openai_provider import OpenAIProvider\n    settings = json.loads(Path('configs/openrouter.example.json').read_text())\n    settings.pop('provider')\n    provider = OpenAIProvider(approved=True, **settings)"
-          if source.count(old_probe) != 1:
-              raise SystemExit("Provider readiness factory did not match runtime")
-          source = source.replace(old_probe, new_probe)
-          source = source.replace("'openrouter': 'model_verified'", "'openai': 'model_verified'")
-          source = source.replace(
-              "key = response.json().get('data', {})\n        if key.get('limit_remaining') is not None and key['limit_remaining'] <= 0:",
-              "key = response.json().get('data', [])\n        if isinstance(key, dict) and key.get('limit_remaining') is not None and key['limit_remaining'] <= 0:")
-          source = source.replace("ttl = 900 if report['connection_error'] else 3600", "ttl = 0 if report['connection_error'] == 'Service connection check failed: AttributeError' else 900 if report['connection_error'] else 3600")
-          cloud.write_text(source, encoding="utf-8")
-          adapter = Path("horizon/openai_provider.py")
-          adapter_source = adapter.read_text(encoding="utf-8")
-          if 'async def close(' not in adapter_source:
-              adapter_source += "\n    async def close(self):\n        await self.client.close()\n"
-          adapter.write_text(adapter_source, encoding="utf-8")
-          cloud_tests = Path("tests/test_cloud.py")
-          cloud_tests.write_text(cloud_tests.read_text().replace("OPENROUTER_API_KEY", "OPENAI_API_KEY"), encoding="utf-8")
+          # Preserve the bundled OpenRouter transport; never inject a personal OpenAI key.
 
           cloud = Path("horizon/cloud.py")
           source = cloud.read_text(encoding="utf-8")
@@ -358,7 +322,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ASKNEWS_API_KEY: ${{ secrets.ASKNEWS_API_KEY }}
           HORIZON_NOTIFY: 'true'
           HORIZON_STATE_RESTORED: 'true'
