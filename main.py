@@ -680,22 +680,22 @@ if __name__ == "__main__":
         extra_metadata_in_explanation=True,
          llms={
     "default": GeneralLlm(
-        model="gpt-5-mini",
+        model="openrouter/openai/gpt-5-mini",
         temperature=0.3,
         max_tokens=2500,
         timeout=60,
         allowed_tries=2,
     ),
     "summarizer": GeneralLlm(
-        model="gpt-5-mini",
+        model="openrouter/openai/gpt-5-mini",
         max_tokens=1200,
     ),
     "researcher": GeneralLlm(
-        model="gpt-5-mini",
+        model="openrouter/openai/gpt-5-mini",
         max_tokens=2000,
     ),
     "parser": GeneralLlm(
-        model="gpt-5-mini",
+        model="openrouter/openai/gpt-5-mini",
         max_tokens=800,
     ),
 },
