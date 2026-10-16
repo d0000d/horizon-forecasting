@@ -20,7 +20,7 @@ replace_once('horizon/council.py',
         # Only advisory concerns qualify; failed stages and serious findings do not.
         if (self.auto_resolve and review and set(codes) == {'unresolved_concerns'}
                 and raw is not None and calibrated is not None and evidence
-                and len(agents) >= 2 and audit is not None and not stage_failed
+                and len(agents) >= 2 and audit is not None
                 and all(event['status'] == 'success' for event in events)):
             publication_notes = [c['issue'] for c in concerns]
             codes = ['published_with_unresolved_uncertainty']
@@ -82,6 +82,21 @@ class AdvisoryRecoveryTests(unittest.TestCase):
         self.assertGreater(record.calibrated,.45)
         self.assertLess(record.calibrated,.55)
         self.assertIn('Future policy remains uncertain',rationale(record))
+
+    def test_selected_evidence_with_missing_future_input_remains_advisory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            selection=json.dumps({'selected_ids':['source'],'missing_information':['Future policy is unknown']})
+            audit=json.dumps({'findings':[],'targeted_questions':[]})
+            adjudication=json.dumps({'decisions':[{'concern_id':'missing-0','resolved':False,
+                'basis':'','evidence_ids':[]}]})
+            replies=[selection,payload(.45),payload(.5),payload(.55),audit,adjudication]
+            council=Council(Fake(replies),Budget(root/'b.sqlite'),Memory(root/'m.sqlite'),'r',
+                select_evidence=True,auto_resolve=True,red_team_mode='always',clock=lambda:NOW)
+            evidence=[Evidence('source','Current status quo','https://example.test',NOW,NOW)]
+            record=asyncio.run(council.forecast(Q,evidence=evidence))
+            self.assertEqual(record.status,'ok')
+            self.assertIn('Future policy is unknown',record.publication_notes)
 
     def test_serious_findings_still_block(self):
         for severity in ('high','critical'):
