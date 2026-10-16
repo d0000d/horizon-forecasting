@@ -49,7 +49,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: recovery-package
-          sparse-checkout: horizon-runtime-recovery.bundle
+          sparse-checkout: |
+            horizon-runtime-recovery.bundle
+            review_recovery.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Load verified recovery commit
@@ -186,6 +188,8 @@ jobs:
           source = source.replace(marker, marker + " 'debug_error': detail.get('debug_error'), 'ledger_debug': detail.get('ledger_debug'),")
           runner.write_text(source, encoding="utf-8")
           PY
+      - name: Install advisory recovery and regression tests
+        run: python recovery-package/review_recovery.py
       - name: Restore previous operational state
         env:
           GH_TOKEN: ${{ github.token }}
@@ -307,7 +311,7 @@ jobs:
           PYTHONPATH=.:tests python - <<'PY'
           import unittest
           names = ['tests.test_state_reconciliation', 'tests.test_cloud', 'tests.test_incident_recovery',
-                   'tests.test_categorical', 'tests.test_numeric', 'tests.test_openrouter_provider']
+                   'tests.test_categorical', 'tests.test_numeric', 'tests.test_openrouter_provider', 'tests.test_review_recovery']
           loaded = unittest.defaultTestLoader.loadTestsFromNames(names)
           def selected(suite):
               for test in suite:
