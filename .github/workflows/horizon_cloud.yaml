@@ -194,6 +194,11 @@ jobs:
           python - <<'PY'
           exec("from pathlib import Path\ncloud=Path('horizon/cloud.py')\ns=cloud.read_text()\ns=s.replace('async def verify_connections():\\n', \"async def verify_connections():\\n    os.environ['OPENROUTER_API_KEY'] = os.environ.get('OPENROUTER_API_KEY', '').strip()\\n\")\ncloud.write_text(s)\np=Path('horizon/openrouter_provider.py')\ns=p.read_text().replace(\"key = os.environ.get('OPENROUTER_API_KEY')\", \"key = os.environ.get('OPENROUTER_API_KEY', '').strip()\")\np.write_text(s)\n")
           PY
+      - name: Parse a single pasted OpenRouter token without changing stored credentials
+        run: |
+          python - <<'PY'
+          exec("from pathlib import Path\ncloud=Path('horizon/cloud.py')\ns=cloud.read_text()\nhelper = '''def normalize_openrouter_key(raw):\n    import re\n    candidates = re.findall(r'(?<![0-9a-zA-Z])sk-or-v1-[0-9a-fA-F]{64}(?![0-9a-fA-F])', raw)\n    return candidates[0] if len(candidates) == 1 else raw.strip()\n\n\n'''\ns=s.replace('async def verify_connections():',helper+'async def verify_connections():')\ns=s.replace(\"os.environ.get('OPENROUTER_API_KEY', '').strip()\", \"normalize_openrouter_key(os.environ.get('OPENROUTER_API_KEY', ''))\")\ncloud.write_text(s)\np=Path('horizon/openrouter_provider.py')\ns=p.read_text().replace(\"key = os.environ.get('OPENROUTER_API_KEY', '').strip()\", \"from .cloud import normalize_openrouter_key\\n            key = normalize_openrouter_key(os.environ.get('OPENROUTER_API_KEY', ''))\")\np.write_text(s)\n")
+          PY
       - name: Install advisory recovery and regression tests
         run: python recovery-package/review_recovery.py
       - name: Restore previous operational state
@@ -321,8 +326,8 @@ jobs:
         run: |
           python - <<'PY'
           import asyncio, os, re
-          from horizon.cloud import verify_connections, connection_failure
-          if not re.fullmatch(r"sk-or-v1-[0-9a-fA-F]{64}", os.environ.get("OPENROUTER_API_KEY", "").strip()):
+          from horizon.cloud import verify_connections, connection_failure, normalize_openrouter_key
+          if not re.fullmatch(r"sk-or-v1-[0-9a-fA-F]{64}", normalize_openrouter_key(os.environ.get("OPENROUTER_API_KEY", ""))):
               print("SERVICE_READINESS: OpenRouter credential format invalid; expected only the complete API token.")
           try:
               result = asyncio.run(verify_connections())
