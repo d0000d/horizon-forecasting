@@ -189,6 +189,11 @@ jobs:
           runner.write_text(source, encoding="utf-8")
           exec("from pathlib import Path\ncloud = Path('horizon/cloud.py')\nsource = cloud.read_text()\nhelper = '''def connection_failure(exc):\n    response = getattr(exc, 'response', None)\n    status = getattr(response, 'status_code', None)\n    request = getattr(response, 'request', None)\n    host = getattr(getattr(request, 'url', None), 'host', None)\n    service = {'www.metaculus.com': 'Metaculus', 'openrouter.ai': 'OpenRouter',\n               'api.asknews.app': 'AskNews', 'api.asknews.ai': 'AskNews'}.get(host, 'service')\n    if host and 'asknews' in host:\n        service = 'AskNews'\n    if status == 402 and service == 'OpenRouter':\n        return 'OpenRouter payment required (HTTP 402)'\n    return service + ' connection check failed: ' + ('HTTP ' + str(status) if status else type(exc).__name__)\n\n\n'''\nold=\"'Model provider payment required' if status == 402 else\\n                                             'Service connection check failed: '+type(exc).__name__\"\nassert source.count(old)==1\nsource=source.replace(old,'connection_failure(exc)')\nsource=source.replace('async def verify_connections():',helper+'async def verify_connections():')\nsource=source.replace(\"ttl = 900 if report['connection_error'] else 3600\", \"ttl = 0 if report['connection_error'] == 'Service connection check failed: HTTPStatusError' else 900 if report['connection_error'] else 3600\")\nsource=source.replace(\"report['connection_error'] = (connection_failure(exc))\", \"report['connection_error'] = connection_failure(exc)\\n                report['connections'] = {}\")\ncloud.write_text(source)\n")
           PY
+      - name: Normalize credential paste whitespace
+        run: |
+          python - <<'PY'
+          exec("from pathlib import Path\ncloud=Path('horizon/cloud.py')\ns=cloud.read_text()\ns=s.replace('async def verify_connections():\\n', \"async def verify_connections():\\n    os.environ['OPENROUTER_API_KEY'] = os.environ.get('OPENROUTER_API_KEY', '').strip()\\n\")\ncloud.write_text(s)\np=Path('horizon/openrouter_provider.py')\ns=p.read_text().replace(\"key = os.environ.get('OPENROUTER_API_KEY')\", \"key = os.environ.get('OPENROUTER_API_KEY', '').strip()\")\np.write_text(s)\n")
+          PY
       - name: Install advisory recovery and regression tests
         run: python recovery-package/review_recovery.py
       - name: Restore previous operational state
@@ -315,8 +320,10 @@ jobs:
           ASKNEWS_API_KEY: ${{ secrets.ASKNEWS_API_KEY }}
         run: |
           python - <<'PY'
-          import asyncio
+          import asyncio, os, re
           from horizon.cloud import verify_connections, connection_failure
+          if not re.fullmatch(r"sk-or-v1-[0-9a-fA-F]{64}", os.environ.get("OPENROUTER_API_KEY", "").strip()):
+              print("SERVICE_READINESS: OpenRouter credential format invalid; expected only the complete API token.")
           try:
               result = asyncio.run(verify_connections())
               print('SERVICE_READINESS:', result)
