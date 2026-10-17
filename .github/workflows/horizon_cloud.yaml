@@ -390,10 +390,23 @@ jobs:
           base = 'https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']
           headers = {'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json'}
           def request(path, data=None):
+              import time
+              from urllib.error import HTTPError, URLError
               raw = json.dumps(data).encode() if data is not None else None
               req = urllib.request.Request(base+path, data=raw, headers=dict(headers, **{'Content-Type':'application/json'}))
-              with urllib.request.urlopen(req, timeout=30) as response:
-                  return json.load(response) if response.status != 204 else None
+              for attempt in range(4):
+                  try:
+                      with urllib.request.urlopen(req, timeout=30) as response:
+                          return json.load(response) if response.status != 204 else None
+                  except HTTPError as exc:
+                      # Retry reads only; a dispatch POST might already be accepted.
+                      if data is not None or exc.code not in {429, 500, 502, 503, 504} or attempt == 3:
+                          raise
+                  except (URLError, TimeoutError):
+                      if data is not None or attempt == 3:
+                          raise
+                  print('Transient GitHub read failure; retrying in '+str(2 ** (attempt+1))+' seconds.', flush=True)
+                  time.sleep(2 ** (attempt+1))
           # Pace failed and idle successors as well as successful runs.
           from datetime import datetime, timezone
           import time
