@@ -525,7 +525,7 @@ jobs:
           path = '/actions/workflows/horizon_cloud.yaml'
           runs = request(path+'/runs?per_page=100')['workflow_runs']
           newer = [r for r in runs if r['run_number'] > int(os.environ['GITHUB_RUN_NUMBER'])
-                   and r['status'] != 'completed']
+                   and r['status'] != 'completed' and r['event'] != 'push']
           if newer:
               print('A successor is already queued or running.')
           else:
