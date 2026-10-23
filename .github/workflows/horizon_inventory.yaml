@@ -1,11 +1,6 @@
 name: Horizon independent inventory
 
 on:
-  push:
-    branches: [main]
-    paths: [.github/workflows/horizon_inventory.yaml]
-  schedule:
-    - cron: '*/6 * * * *'
   workflow_dispatch:
 
 permissions:

@@ -51,7 +51,7 @@ jobs:
               data = key_response.json().get('data', {})
               remaining = data.get('limit_remaining')
               print(json.dumps({'key_authenticated': True, 'key_limit_exhausted': remaining is not None and remaining <= 0, 'free_tier': data.get('is_free_tier')}))
-              for tokens in (256, 24576):
+              for tokens in (256,):
                   response = client.post('chat/completions', json={'model':'openai/gpt-6-astra', 'messages':[{'role':'user','content':'Return JSON: {"ok":true}'}], 'max_completion_tokens': tokens, 'response_format':{'type':'json_object'}, 'provider':{'allow_fallbacks':False}})
                   try:
                       error = str(response.json().get('error', {}).get('message', '')).lower()
@@ -71,6 +71,7 @@ jobs:
           async def main():
               settings=json.loads(Path('configs/openrouter.example.json').read_text())
               settings.pop('provider')
+              settings['max_output_tokens'] = 256
               provider=OpenRouterProvider(approved=True, **settings)
               try:
                   reply=await provider.complete('Return exactly this JSON object: {"ok":true}')
