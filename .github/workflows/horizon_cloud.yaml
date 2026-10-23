@@ -3,7 +3,7 @@ name: Horizon scheduled monitor
 on:
   push:
     branches: [main]
-    paths: [.github/workflows/horizon_cloud.yaml]
+    paths: [.github/workflows/horizon_cloud.yaml, operations_recovery.py, tests_operations.py, verify_publication.py]
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
@@ -36,7 +36,7 @@ env:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event_name == 'schedule' && 350 || 30 }}
+    timeout-minutes: 90
     outputs:
       artifact_id: ${{ steps.persist.outputs.artifact-id }}
     steps:
@@ -52,6 +52,9 @@ jobs:
           sparse-checkout: |
             horizon-runtime-recovery.bundle
             review_recovery.py
+            operations_recovery.py
+            tests_operations.py
+            verify_publication.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Load verified recovery commit
@@ -393,6 +396,11 @@ jobs:
                               self.assertEqual(provider.complete.await_count,5)
           ''')
           PY
+      - name: Apply bounded operations recovery
+        run: |
+          python recovery-package/operations_recovery.py
+          cp recovery-package/tests_operations.py tests/test_operations.py
+          cp recovery-package/verify_publication.py verify_publication.py
       - name: Restore previous operational state
         env:
           GH_TOKEN: ${{ github.token }}
@@ -526,13 +534,19 @@ jobs:
               print('SERVICE_READINESS:', result)
           except Exception as exc:
               print('SERVICE_READINESS:', connection_failure(exc))
+              raise SystemExit(1)
           PY
+      - name: Verify historical forecast publication without submitting
+        if: ${{ github.event_name == 'push' }}
+        env:
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
+        run: python verify_publication.py
       - name: Test durable state and incident recovery
         run: |
           PYTHONPATH=.:tests python - <<'PY'
           import unittest
           names = ['tests.test_state_reconciliation', 'tests.test_cloud', 'tests.test_incident_recovery',
-                   'tests.test_categorical', 'tests.test_numeric', 'tests.test_openrouter_provider', 'tests.test_review_recovery']
+                   'tests.test_categorical', 'tests.test_numeric', 'tests.test_openrouter_provider', 'tests.test_review_recovery', 'tests.test_operations']
           loaded = unittest.defaultTestLoader.loadTestsFromNames(names)
           def selected(suite):
               for test in suite:
@@ -553,7 +567,7 @@ jobs:
           HORIZON_STATE_RESTORED: 'true'
           HORIZON_MODE: ${{ github.event_name == 'push' && 'observe' || (github.event_name == 'schedule' && (vars.HORIZON_MODE || 'publish')) || inputs.mode || vars.HORIZON_MODE || 'observe' }}
           HORIZON_WATCH_MINUTES: ${{ github.event_name == 'schedule' && '0' || inputs.watch_minutes || '0' }}
-        run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 60
+        run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 360
       - name: Persist operational state even after degraded health
         id: persist
         if: ${{ always() && hashFiles('work/cloud-export/checkpoint.json') != '' }}
@@ -563,58 +577,3 @@ jobs:
           path: work/cloud-export/*
           if-no-files-found: error
           retention-days: 90
-
-  continue_monitor:
-    needs: monitor
-    if: ${{ always() && needs.monitor.outputs.artifact_id != '' && vars.HORIZON_CONTINUOUS != 'false' && ((github.event_name == 'workflow_dispatch' && inputs.mode == 'publish') || (github.event_name == 'schedule' && (vars.HORIZON_MODE == 'publish' || vars.HORIZON_MODE == ''))) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Queue successor after durable checkpoint upload
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python - <<'PY'
-          import json, os, urllib.request
-          base = 'https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']
-          headers = {'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json'}
-          def request(path, data=None):
-              import time
-              from urllib.error import HTTPError, URLError
-              raw = json.dumps(data).encode() if data is not None else None
-              req = urllib.request.Request(base+path, data=raw, headers=dict(headers, **{'Content-Type':'application/json'}))
-              for attempt in range(4):
-                  try:
-                      with urllib.request.urlopen(req, timeout=30) as response:
-                          return json.load(response) if response.status != 204 else None
-                  except HTTPError as exc:
-                      # Retry reads only; a dispatch POST might already be accepted.
-                      if data is not None or exc.code not in {429, 500, 502, 503, 504} or attempt == 3:
-                          raise
-                  except (URLError, TimeoutError):
-                      if data is not None or attempt == 3:
-                          raise
-                  print('Transient GitHub read failure; retrying in '+str(2 ** (attempt+1))+' seconds.', flush=True)
-                  time.sleep(2 ** (attempt+1))
-          # Pace failed and idle successors as well as successful runs.
-          from datetime import datetime, timezone
-          import time
-          current = request('/actions/runs/'+os.environ['GITHUB_RUN_ID'])
-          started = datetime.fromisoformat(current['run_started_at'].replace('Z', '+00:00'))
-          remaining = max(0, 60-(datetime.now(timezone.utc)-started).total_seconds())
-          if remaining:
-              print('Waiting for the one-minute successor interval.', flush=True)
-              time.sleep(remaining)
-          path = '/actions/workflows/horizon_cloud.yaml'
-          runs = request(path+'/runs?per_page=100')['workflow_runs']
-          newer = [r for r in runs if r['run_number'] > int(os.environ['GITHUB_RUN_NUMBER'])
-                   and r['status'] != 'completed' and r['event'] != 'push']
-          if newer:
-              print('A successor is already queued or running.')
-          else:
-              request(path+'/dispatches', {'ref':'main','inputs':{'mode':'publish','watch_minutes':'0'}})
-              print('Successor requested after confirmed state upload.')
-          PY
