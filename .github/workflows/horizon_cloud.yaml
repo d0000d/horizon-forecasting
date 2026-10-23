@@ -518,7 +518,7 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install asknews==0.13.11 httpx==0.28.1 openai
       - name: Diagnose service readiness without publishing forecasts
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'observe') }}
         env:
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -537,7 +537,7 @@ jobs:
               raise SystemExit(1)
           PY
       - name: Verify historical forecast publication without submitting
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'observe') }}
         env:
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
         run: python verify_publication.py
