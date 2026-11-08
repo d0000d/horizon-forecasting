@@ -1,6 +1,8 @@
 import argparse
 import asyncio
 import logging
+import os
+import re
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -42,6 +44,13 @@ from forecasting_tools import (
 )
 
 dotenv.load_dotenv()
+# The Metaculus-funded OpenRouter key may have been pasted with whitespace or
+# surrounding text. Extract exactly one full token and never print credentials.
+_raw_or_key = os.getenv("OPENROUTER_API_KEY", "")
+_or_tokens = re.findall(r"(?<![0-9A-Za-z])sk-or-v1-[0-9a-fA-F]{64}(?![0-9a-fA-F])", _raw_or_key)
+os.environ["OPENROUTER_API_KEY"] = (
+    _or_tokens[0] if len(_or_tokens) == 1 else _raw_or_key.strip()
+)
 logger = logging.getLogger(__name__)
 
 
