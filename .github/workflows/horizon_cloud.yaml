@@ -4,8 +4,10 @@ on:
   push:
     branches: [main]
     paths: [.github/workflows/horizon_cloud.yaml]
-  schedule:
-    - cron: '*/5 * * * *'
+  # Scheduled runs paused 2026-11-08: the template bot (run_bot_on_tournament.yaml)
+  # is the primary forecaster. Restore the two lines below to resume Horizon.
+  # schedule:
+  #  - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       mode:

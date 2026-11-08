@@ -170,9 +170,21 @@ class SummerTemplateBot2026(ForecastBot):
                 or researcher == "asknews/deep-research/medium-depth"
                 or researcher == "asknews/deep-research/high-depth"
             ):
-                research = await AskNewsSearcher().call_preconfigured_version(
-                    researcher, prompt
-                )
+                try:
+                    research = await AskNewsSearcher().call_preconfigured_version(
+                        researcher, prompt
+                    )
+                except Exception as exc:
+                    # Never lose a question because news search failed: fall
+                    # back to the summarizer model and say so in the research.
+                    logger.warning(
+                        f"AskNews failed for {question.page_url} ({type(exc).__name__}); "
+                        "falling back to model-only research"
+                    )
+                    research = (
+                        "[News search unavailable; background from model knowledge only]\n"
+                        + await self.get_llm("summarizer", "llm").invoke(prompt)
+                    )
             elif researcher.startswith("smart-searcher"):
                 model_name = researcher.removeprefix("smart-searcher/")
                 searcher = SmartSearcher(
@@ -688,10 +700,13 @@ if __name__ == "__main__":
         skip_previously_forecasted_questions=True,
         extra_metadata_in_explanation=True,
          llms={
+    # Primary forecaster. In the Fall 2026 FutureEval leaderboard Metaculus's
+    # plain claude-sonnet-5-5-high+asknews bot scored ~403 vs ~210-317 for the
+    # gpt-6-astra variants Horizon used, at a fifth of the token price.
     "default": GeneralLlm(
-        model="openrouter/openai/gpt-5-mini",
+        model="openrouter/anthropic/claude-sonnet-5.5",
         temperature=0.3,
-        max_tokens=2500,
+        max_tokens=4000,
         timeout=60,
         allowed_tries=2,
     ),
@@ -699,10 +714,8 @@ if __name__ == "__main__":
         model="openrouter/openai/gpt-5-mini",
         max_tokens=1200,
     ),
-    "researcher": GeneralLlm(
-        model="openrouter/openai/gpt-5-mini",
-        max_tokens=2000,
-    ),
+    # Real news search instead of model memory (AskNews key is shared with Horizon).
+    "researcher": "asknews/news-summaries",
     "parser": GeneralLlm(
         model="openrouter/openai/gpt-5-mini",
         max_tokens=800,
@@ -724,13 +737,10 @@ if __name__ == "__main__":
     # summary printers below.
     client = MetaculusClient()
     if run_mode == "tournament":
-        # Horizon (horizon_cloud.yaml) is the primary Fall 2026 forecaster and
-        # shares this Metaculus account. Because both bots skip questions that
-        # already have a forecast, whichever bot posts first locks the other
-        # out. The template bot therefore acts only as a fallback: it forecasts
-        # a Fall question once Horizon has had TEMPLATE_FALLBACK_HOURS to post,
-        # or when the question closes within TEMPLATE_LAST_CALL_HOURS.
-        fallback_hours = float(os.getenv("TEMPLATE_FALLBACK_HOURS") or 3)
+        # This bot is now the primary Fall 2026 forecaster (Horizon publishing
+        # is paused). TEMPLATE_FALLBACK_HOURS > 0 turns it back into a delayed
+        # fallback that gives Horizon first claim on each question.
+        fallback_hours = float(os.getenv("TEMPLATE_FALLBACK_HOURS") or 0)
         last_call_hours = float(os.getenv("TEMPLATE_LAST_CALL_HOURS") or 2)
         now_utc = datetime.now(timezone.utc)
 

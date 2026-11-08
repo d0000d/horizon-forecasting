@@ -1,0 +1,44 @@
+name: Bot health supervisor
+
+# Every 6 hours (first run ~06:47 Zagreb): checks coverage of open Fall and
+# MiniBench questions, OpenRouter credit, and recent forecasting runs.
+# Opens/updates a "Bot health alert" issue and fails (=> email) on problems.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "47 5,11,17,23 * * *"
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-root
+      - name: Check bot health
+        run: poetry run python supervisor.py
+        env:
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          SUPERVISOR_GRACE_HOURS: ${{ vars.SUPERVISOR_GRACE_HOURS }}
+          SUPERVISOR_MIN_CREDIT_USD: ${{ vars.SUPERVISOR_MIN_CREDIT_USD }}
+          SUPERVISOR_MAX_QUIET_HOURS: ${{ vars.SUPERVISOR_MAX_QUIET_HOURS }}
