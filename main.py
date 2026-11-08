@@ -724,10 +724,37 @@ if __name__ == "__main__":
     # summary printers below.
     client = MetaculusClient()
     if run_mode == "tournament":
+        # Horizon (horizon_cloud.yaml) is the primary Fall 2026 forecaster and
+        # shares this Metaculus account. Because both bots skip questions that
+        # already have a forecast, whichever bot posts first locks the other
+        # out. The template bot therefore acts only as a fallback: it forecasts
+        # a Fall question once Horizon has had TEMPLATE_FALLBACK_HOURS to post,
+        # or when the question closes within TEMPLATE_LAST_CALL_HOURS.
+        fallback_hours = float(os.getenv("TEMPLATE_FALLBACK_HOURS") or 3)
+        last_call_hours = float(os.getenv("TEMPLATE_LAST_CALL_HOURS") or 2)
+        now_utc = datetime.now(timezone.utc)
+
+        def _fallback_due(question) -> bool:
+            opened, closes = question.open_time, question.close_time
+            if opened is not None and opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            if closes is not None and closes.tzinfo is None:
+                closes = closes.replace(tzinfo=timezone.utc)
+            aged = opened is None or (now_utc - opened).total_seconds() >= fallback_hours * 3600
+            closing = closes is not None and (closes - now_utc).total_seconds() <= last_call_hours * 3600
+            return aged or closing
+
+        fall_questions = client.get_all_open_questions_from_tournament(
+            "fall-futureeval-2026"
+        )
+        due_questions = [q for q in fall_questions if _fallback_due(q)]
+        logger.info(
+            f"Fall fallback: {len(due_questions)} of {len(fall_questions)} open "
+            f"questions are past the {fallback_hours}h Horizon grace period or "
+            f"close within {last_call_hours}h"
+        )
         seasonal_tournament_reports = asyncio.run(
-            template_bot.forecast_on_tournament(
-                "fall-futureeval-2026", return_exceptions=True
-            )
+            template_bot.forecast_questions(due_questions, return_exceptions=True)
         )
         minibench_reports = asyncio.run(
             template_bot.forecast_on_tournament(

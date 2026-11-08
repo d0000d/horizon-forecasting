@@ -561,8 +561,12 @@ jobs:
           HORIZON_NOTIFY: 'false'
           HORIZON_STATE_RESTORED: 'true'
           HORIZON_MODE: ${{ github.event_name == 'push' && 'observe' || (github.event_name == 'schedule' && (vars.HORIZON_MODE || 'publish')) || inputs.mode || vars.HORIZON_MODE || 'observe' }}
-          HORIZON_WATCH_MINUTES: ${{ github.event_name == 'schedule' && '0' || inputs.watch_minutes || '0' }}
-        run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds 60
+          # Scheduled runs keep one long watch (~4h of polling every 5 min) so
+          # Horizon no longer depends on GitHub's unreliable */5 cron. The
+          # concurrency group queues the next scheduled run behind this one.
+          HORIZON_WATCH_MINUTES: ${{ github.event_name == 'schedule' && '330' || inputs.watch_minutes || '0' }}
+          HORIZON_INTERVAL_SECONDS: ${{ github.event_name == 'schedule' && '300' || '60' }}
+        run: python -u -m horizon.cloud --mode "$HORIZON_MODE" --watch-minutes "$HORIZON_WATCH_MINUTES" --interval-seconds "$HORIZON_INTERVAL_SECONDS"
       - name: Persist operational state even after degraded health
         id: persist
         if: ${{ always() && hashFiles('work/cloud-export/checkpoint.json') != '' }}

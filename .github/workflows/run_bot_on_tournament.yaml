@@ -1,11 +1,6 @@
 name: Forecast on new AI tournament questions
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - main.py
-      - .github/workflows/run_bot_on_tournament.yaml
   workflow_dispatch:
   schedule:
     - cron: "7,27,47 * * * *" # every 20 min, offset off the hour. Make sure to skip already-forecasted questions!
@@ -48,6 +43,8 @@ jobs:
         # this reads the environment variables from the github repository.
         # Store under Settings --> Secrets and variables --> Actions
         env:
+          TEMPLATE_FALLBACK_HOURS: ${{ vars.TEMPLATE_FALLBACK_HOURS }}
+          TEMPLATE_LAST_CALL_HOURS: ${{ vars.TEMPLATE_LAST_CALL_HOURS }}
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }} # replace this with the name of the variable under which you stored your own Metaculus token
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
