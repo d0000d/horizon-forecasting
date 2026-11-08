@@ -181,9 +181,10 @@ class SummerTemplateBot2026(ForecastBot):
                         f"AskNews failed for {question.page_url} ({type(exc).__name__}); "
                         "falling back to model-only research"
                     )
+                    fallback = await self.get_llm("default", "llm").invoke(prompt)
                     research = (
                         "[News search unavailable; background from model knowledge only]\n"
-                        + await self.get_llm("summarizer", "llm").invoke(prompt)
+                        + (fallback or "")
                     )
             elif researcher.startswith("smart-searcher"):
                 model_name = researcher.removeprefix("smart-searcher/")
