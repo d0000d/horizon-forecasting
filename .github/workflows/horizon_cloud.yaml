@@ -403,6 +403,7 @@ jobs:
           import os
           import pathlib
           import shutil
+          import time
           import urllib.request
           import zipfile
           from urllib.error import HTTPError
@@ -420,8 +421,16 @@ jobs:
 
           def get_json(url):
               request = urllib.request.Request(url, headers=headers)
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  return json.load(response)
+              for attempt in range(4):
+                  try:
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          return json.load(response)
+                  except HTTPError as exc:
+                      if exc.code not in (429, 500, 502, 503, 504) or attempt == 3:
+                          raise
+                      delay = 2 ** attempt
+                      print(f"Transient GitHub API HTTP {exc.code}; retrying in {delay}s", flush=True)
+                      time.sleep(delay)
 
           api = f"https://api.github.com/repos/{repo}"
           artifacts = get_json(
@@ -566,7 +575,7 @@ jobs:
 
   continue_monitor:
     needs: monitor
-    if: ${{ always() && needs.monitor.outputs.artifact_id != '' && vars.HORIZON_CONTINUOUS != 'false' && ((github.event_name == 'workflow_dispatch' && inputs.mode == 'publish') || (github.event_name == 'schedule' && (vars.HORIZON_MODE == 'publish' || vars.HORIZON_MODE == ''))) }}
+    if: ${{ false }} # Five-minute schedule replaces recursive dispatch, avoiding duplicate runs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
