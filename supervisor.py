@@ -89,7 +89,18 @@ try:
     resp.raise_for_status()
     board = resp.json()
     if isinstance(board, list):
-        entries = board
+        # A list of leaderboards; use the primary one. `userEntry` is the
+        # token owner's (our bot's) own row, present even outside the top page.
+        lb = next((b for b in board if b.get("is_primary_leaderboard")), board[0] if board else {})
+        entries = lb.get("entries") or []
+        mine = lb.get("userEntry")
+        if mine:
+            lines.append(f"- **our rank {mine.get('rank')}**, score {mine.get('score')}, "
+                         f"coverage {mine.get('coverage')}, questions {mine.get('contribution_count')}")
+        lines.append(f"- leaderboard: {lb.get('name')}, score type {lb.get('score_type')}, "
+                     f"max coverage {lb.get('max_coverage')}")
+        if entries:
+            lines.append(f"- top entry: {json.dumps(entries[0])[:300]}")
     else:
         entries = board.get("entries") or board.get("results") or []
         if entries and isinstance(entries[0], dict) and "entries" in entries[0]:
