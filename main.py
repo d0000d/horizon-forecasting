@@ -713,13 +713,17 @@ if __name__ == "__main__":
     ),
     "summarizer": GeneralLlm(
         model="openrouter/openai/gpt-5-mini",
-        max_tokens=1200,
+        # gpt-5-mini spends hidden reasoning tokens out of max_tokens; 1200
+        # left the summary empty ("AssertionError exception while summarizing").
+        max_tokens=4000,
     ),
     # Real news search instead of model memory (AskNews key is shared with Horizon).
     "researcher": "asknews/news-summaries",
     "parser": GeneralLlm(
         model="openrouter/openai/gpt-5-mini",
-        max_tokens=800,
+        # 800 truncated numeric percentile JSON mid-list ("Extra data") because
+        # reasoning tokens count against the limit. Parsing is cheap; give room.
+        max_tokens=4000,
     ),
 },
     )

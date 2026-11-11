@@ -58,6 +58,26 @@ for slug in TOURNAMENTS:
     if missing:
         problems.append(f"{len(missing)} open `{slug}` question(s) without our forecast")
 
+# MiniBench has returned 0 open questions since late October and its
+# performance is what unlocks more Metaculus credit. Show the newest MiniBench
+# question (any status) so we can tell "between rounds" from "wrong slug".
+try:
+    resp = httpx.get(
+        "https://www.metaculus.com/api/posts/",
+        params={"tournaments": "minibench", "order_by": "-open_time", "limit": 1},
+        headers={"Authorization": f"Token {os.getenv('METACULUS_TOKEN', '')}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    newest = (resp.json().get("results") or [None])[0]
+    if newest:
+        lines.append(f"- minibench newest question: opened {newest.get('open_time')}, "
+                     f"status {newest.get('status')}: {str(newest.get('title'))[:80]}")
+    else:
+        lines.append("- minibench newest question: none returned for slug `minibench`")
+except Exception as exc:
+    lines.append(f"- minibench probe failed ({type(exc).__name__})")
+
 # 2. Budget ----------------------------------------------------------------
 lines += ["", "## OpenRouter credit"]
 raw_key = os.getenv("OPENROUTER_API_KEY", "")
