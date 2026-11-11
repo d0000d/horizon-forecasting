@@ -88,8 +88,14 @@ try:
     )
     resp.raise_for_status()
     board = resp.json()
-    entries = board.get("entries") or board.get("results") or []
+    if isinstance(board, list):
+        entries = board
+    else:
+        entries = board.get("entries") or board.get("results") or []
+        if entries and isinstance(entries[0], dict) and "entries" in entries[0]:
+            entries = entries[0]["entries"]
     lines.append(f"- fall-futureeval-2026: {len(entries)} entries")
+    entries = [e for e in entries if isinstance(e, dict)]
     ours = [e for e in entries
             if "domagoj" in json.dumps(e.get("user") or e.get("username") or "").lower()]
     for e in ours:
