@@ -78,6 +78,28 @@ try:
 except Exception as exc:
     lines.append(f"- minibench probe failed ({type(exc).__name__})")
 
+# Leaderboard rank: Claude can't reach Metaculus directly, so log it here.
+lines += ["", "## Leaderboard"]
+try:
+    resp = httpx.get(
+        "https://www.metaculus.com/api/leaderboards/project/33121/",
+        headers={"Authorization": f"Token {os.getenv('METACULUS_TOKEN', '')}"},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    board = resp.json()
+    entries = board.get("entries") or board.get("results") or []
+    lines.append(f"- fall-futureeval-2026: {len(entries)} entries")
+    ours = [e for e in entries
+            if "domagoj" in json.dumps(e.get("user") or e.get("username") or "").lower()]
+    for e in ours:
+        lines.append(f"- **rank {e.get('rank')}** / {len(entries)}, score {e.get('score')}, "
+                     f"coverage {e.get('coverage')}, questions {e.get('contribution_count')}")
+    if not ours:
+        lines.append(f"- our bot not found; first entry keys: {sorted((entries[0] if entries else {}).keys())}")
+except Exception as exc:
+    lines.append(f"- leaderboard fetch failed ({type(exc).__name__}: {str(exc)[:120]})")
+
 # 2. Budget ----------------------------------------------------------------
 lines += ["", "## OpenRouter credit"]
 raw_key = os.getenv("OPENROUTER_API_KEY", "")
