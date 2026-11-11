@@ -3,7 +3,11 @@ name: Forecast on new AI tournament questions
 on:
   workflow_dispatch:
   schedule:
-    - cron: "7,27,47 * * * *" # every 20 min, offset off the hour. Make sure to skip already-forecasted questions!
+    # GitHub drops most frequent cron runs (the old */20 schedule ran only every
+    # 4-8h, so short-lived MiniBench questions opened and closed unseen). Each
+    # run now watches for ~5h45m, polling every 10 min; the hourly cron keeps
+    # one run queued behind it, so watching is continuous.
+    - cron: "7 * * * *"
 
 # Add concurrency group to prevent parallel runs
 concurrency:
@@ -15,6 +19,7 @@ concurrency:
 jobs:
   forecast_job:
     runs-on: ubuntu-latest # determines the machine that will run the job - keep as is
+    timeout-minutes: 355
     steps: # sets up the steps that will be run in order
       # setup repository with all necessary dependencies - keep as is
       - name: Check out repository
@@ -39,10 +44,16 @@ jobs:
         run: poetry install --no-interaction --no-root
       - name: Run bot
         run: |
-          poetry run python main.py
+          end=$(( $(date +%s) + ${WATCH_MINUTES:-345} * 60 ))
+          while :; do
+            poetry run python main.py || echo "::warning::bot pass failed, retrying next poll"
+            [ $(( $(date +%s) + 600 )) -ge $end ] && break
+            sleep 600
+          done
         # this reads the environment variables from the github repository.
         # Store under Settings --> Secrets and variables --> Actions
         env:
+          WATCH_MINUTES: ${{ github.event_name == 'workflow_dispatch' && '1' || '345' }}
           TEMPLATE_FALLBACK_HOURS: ${{ vars.TEMPLATE_FALLBACK_HOURS }}
           TEMPLATE_LAST_CALL_HOURS: ${{ vars.TEMPLATE_LAST_CALL_HOURS }}
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }} # replace this with the name of the variable under which you stored your own Metaculus token

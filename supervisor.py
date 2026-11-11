@@ -23,7 +23,7 @@ from forecasting_tools import MetaculusClient
 TOURNAMENTS = ["fall-futureeval-2026", "minibench"]
 GRACE_HOURS = float(os.getenv("SUPERVISOR_GRACE_HOURS") or 3)
 MIN_CREDIT_USD = float(os.getenv("SUPERVISOR_MIN_CREDIT_USD") or 15)
-MAX_HOURS_WITHOUT_SUCCESS = float(os.getenv("SUPERVISOR_MAX_QUIET_HOURS") or 6)
+MAX_HOURS_WITHOUT_SUCCESS = float(os.getenv("SUPERVISOR_MAX_QUIET_HOURS") or 8)
 WORKFLOW_FILE = "run_bot_on_tournament.yaml"
 ISSUE_TITLE = "Bot health alert"
 
