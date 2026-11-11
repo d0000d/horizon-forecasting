@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from forecasting_tools import MetaculusClient
 
-TOURNAMENTS = ["fall-futureeval-2026", "minibench"]
+TOURNAMENTS = ["fall-futureeval-2026", "minibench", "market-pulse-26q4"]
 GRACE_HOURS = float(os.getenv("SUPERVISOR_GRACE_HOURS") or 3)
 MIN_CREDIT_USD = float(os.getenv("SUPERVISOR_MIN_CREDIT_USD") or 15)
 MAX_HOURS_WITHOUT_SUCCESS = float(os.getenv("SUPERVISOR_MAX_QUIET_HOURS") or 8)

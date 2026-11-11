@@ -258,7 +258,8 @@ class SummerTemplateBot2026(ForecastBot):
             model=self.get_llm("parser", "llm"),
             num_validation_samples=self._structure_output_validation_samples,
         )
-        decimal_pred = max(0.01, min(0.99, binary_prediction.prediction_in_decimal))
+        # Cap at 3/97%: a confident miss costs far more peer score than the cap gives up.
+        decimal_pred = max(0.03, min(0.97, binary_prediction.prediction_in_decimal))
 
         logger.info(
             f"Forecasted URL {question.page_url} with prediction: {decimal_pred}."
@@ -776,7 +777,21 @@ if __name__ == "__main__":
                 client.CURRENT_MINIBENCH_ID, return_exceptions=True
             )
         )
-        forecast_reports = seasonal_tournament_reports + minibench_reports
+        # Market Pulse ($7k pool, bots prize-eligible). Its own failure must
+        # never cost us the Fall/MiniBench forecasts above.
+        try:
+            market_pulse_reports = asyncio.run(
+                template_bot.forecast_on_tournament(
+                    os.getenv("MARKET_PULSE_ID") or "market-pulse-26q4",
+                    return_exceptions=True,
+                )
+            )
+        except Exception as exc:
+            logger.warning(f"Market Pulse skipped ({type(exc).__name__}: {exc})")
+            market_pulse_reports = []
+        forecast_reports = (
+            seasonal_tournament_reports + minibench_reports + market_pulse_reports
+        )
     elif run_mode == "metaculus_cup":
         # The Metaculus Cup may be uninitialized near the start of a season
         # (Jan/May/Sep). AXC_2025_TOURNAMENT_ID = 32564 and
