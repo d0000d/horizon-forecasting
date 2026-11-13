@@ -2,12 +2,20 @@ name: Forecast on new AI tournament questions
 
 on:
   workflow_dispatch:
+    inputs:
+      watch_minutes:
+        description: "How long to keep polling (1 = a single pass)"
+        default: "1"
   schedule:
-    # GitHub drops most frequent cron runs (the old */20 schedule ran only every
-    # 4-8h, so short-lived MiniBench questions opened and closed unseen). Each
-    # run now watches for ~5h45m, polling every 10 min; the hourly cron keeps
-    # one run queued behind it, so watching is continuous.
+    # GitHub fires this "hourly" cron only every ~8h for this repo, so cron alone
+    # left 1-3h unwatched after every 5h45m run (Nov 12-13: about 30% of the
+    # time). Each watch run therefore queues its own successor in the last step;
+    # the cron is only the backstop that restarts the chain if it ever breaks.
     - cron: "7 * * * *"
+
+permissions:
+  contents: read
+  actions: write # lets a run queue the next one
 
 # Add concurrency group to prevent parallel runs
 concurrency:
@@ -53,7 +61,7 @@ jobs:
         # this reads the environment variables from the github repository.
         # Store under Settings --> Secrets and variables --> Actions
         env:
-          WATCH_MINUTES: ${{ github.event_name == 'workflow_dispatch' && '1' || '345' }}
+          WATCH_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.watch_minutes || '345' }}
           TEMPLATE_FALLBACK_HOURS: ${{ vars.TEMPLATE_FALLBACK_HOURS }}
           TEMPLATE_LAST_CALL_HOURS: ${{ vars.TEMPLATE_LAST_CALL_HOURS }}
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }} # replace this with the name of the variable under which you stored your own Metaculus token
@@ -62,3 +70,10 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ASKNEWS_API_KEY: ${{ secrets.ASKNEWS_API_KEY }} # same key Horizon verified
+      # Keep watching without waiting for the next cron. A manually cancelled run
+      # does not queue a successor, and a single-pass manual run does not either.
+      - name: Queue the next watch
+        if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.watch_minutes != '1') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run run_bot_on_tournament.yaml --repo "$GITHUB_REPOSITORY" --ref main -f watch_minutes=345

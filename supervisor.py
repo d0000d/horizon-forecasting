@@ -23,7 +23,9 @@ from forecasting_tools import MetaculusClient
 TOURNAMENTS = ["fall-futureeval-2026", "minibench", "market-pulse-26q4"]
 GRACE_HOURS = float(os.getenv("SUPERVISOR_GRACE_HOURS") or 3)
 MIN_CREDIT_USD = float(os.getenv("SUPERVISOR_MIN_CREDIT_USD") or 15)
-MAX_HOURS_WITHOUT_SUCCESS = float(os.getenv("SUPERVISOR_MAX_QUIET_HOURS") or 8)
+# Watch runs chain into each other, so there should always be one running or
+# queued. Alert only when nothing is and the last one ended a while ago.
+MAX_HOURS_UNWATCHED = float(os.getenv("SUPERVISOR_MAX_QUIET_HOURS") or 1.5)
 WORKFLOW_FILE = "run_bot_on_tournament.yaml"
 ISSUE_TITLE = "Bot health alert"
 
@@ -150,14 +152,19 @@ try:
     ok = [r for r in day if r["conclusion"] == "success"]
     bad = [r for r in day if r["conclusion"] == "failure"]
     last_ok = next((r for r in runs if r["conclusion"] == "success"), None)
-    lines.append(f"- last 24h: {len(day)} runs, {len(ok)} ok, {len(bad)} failed")
+    running = [r for r in runs if r["status"] in ("in_progress", "queued", "pending", "waiting", "requested")]
+    lines.append(f"- last 24h: {len(day)} runs, {len(ok)} ok, {len(bad)} failed, {len(running)} running or queued")
     if last_ok:
-        age = now - datetime.fromisoformat(last_ok["created_at"].replace("Z", "+00:00"))
-        lines.append(f"- last success: {age.total_seconds() / 3600:.1f}h ago ({last_ok['html_url']})")
-        if age > timedelta(hours=MAX_HOURS_WITHOUT_SUCCESS):
-            problems.append(f"No successful forecasting run for {age.total_seconds() / 3600:.1f}h")
-    else:
-        problems.append("No successful forecasting run found")
+        # A watch run lasts ~6h, so measure from when it finished, not when it started.
+        age = now - datetime.fromisoformat(last_ok["updated_at"].replace("Z", "+00:00"))
+        lines.append(f"- last success finished {age.total_seconds() / 3600:.1f}h ago ({last_ok['html_url']})")
+    if not running:
+        idle = (now - datetime.fromisoformat(last_ok["updated_at"].replace("Z", "+00:00"))
+                if last_ok else None)
+        if idle is None:
+            problems.append("No successful forecasting run found")
+        elif idle > timedelta(hours=MAX_HOURS_UNWATCHED):
+            problems.append(f"Nothing has watched the tournaments for {idle.total_seconds() / 3600:.1f}h")
     if bad:
         lines.append(f"- latest failure: {bad[0]['html_url']}")
         if len(bad) >= 3:

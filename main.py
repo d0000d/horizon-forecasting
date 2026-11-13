@@ -162,46 +162,97 @@ class SummerTemplateBot2026(ForecastBot):
                 """
             )
 
-            if isinstance(researcher, GeneralLlm):
-                research = await researcher.invoke(prompt)
-            elif (
-                researcher == "asknews/news-summaries"
-                or researcher == "asknews/deep-research/low-depth"
-                or researcher == "asknews/deep-research/medium-depth"
-                or researcher == "asknews/deep-research/high-depth"
-            ):
-                try:
-                    research = await AskNewsSearcher().call_preconfigured_version(
-                        researcher, prompt
-                    )
-                except Exception as exc:
-                    # Never lose a question because news search failed: fall
-                    # back to the summarizer model and say so in the research.
-                    logger.warning(
-                        f"AskNews failed for {question.page_url} ({type(exc).__name__}); "
-                        "falling back to model-only research"
-                    )
-                    fallback = await self.get_llm("default", "llm").invoke(prompt)
-                    research = (
-                        "[News search unavailable; background from model knowledge only]\n"
-                        + (fallback or "")
-                    )
-            elif researcher.startswith("smart-searcher"):
-                model_name = researcher.removeprefix("smart-searcher/")
-                searcher = SmartSearcher(
-                    model=model_name,
-                    temperature=0,
-                    num_searches_to_run=2,
-                    num_sites_per_search=10,
-                    use_advanced_filters=False,
-                )
-                research = await searcher.invoke(prompt)
-            elif not researcher or researcher == "None" or researcher == "no_research":
-                research = ""
-            else:
-                research = await self.get_llm("researcher", "llm").invoke(prompt)
+            news_task = asyncio.create_task(self._news_research(question, researcher, prompt))
+            facts_task = asyncio.create_task(self._targeted_web_research(question))
+            news, facts = await news_task, await facts_task
+            research = (
+                f"## Current status from a targeted web search\n{facts}\n\n## Recent news\n{news}"
+                if facts
+                else news
+            )
             logger.info(f"Found Research for URL {question.page_url}:\n{research}")
             return research
+
+    async def _news_research(self, question: MetaculusQuestion, researcher, prompt: str) -> str:
+        news = ""
+        if isinstance(researcher, GeneralLlm):
+            news = await researcher.invoke(prompt)
+        elif (
+            researcher == "asknews/news-summaries"
+            or researcher == "asknews/deep-research/low-depth"
+            or researcher == "asknews/deep-research/medium-depth"
+            or researcher == "asknews/deep-research/high-depth"
+        ):
+            try:
+                news = await AskNewsSearcher().call_preconfigured_version(
+                    researcher, prompt
+                )
+            except Exception as exc:
+                # Never lose a question because news search failed: fall
+                # back to the summarizer model and say so in the research.
+                logger.warning(
+                    f"AskNews failed for {question.page_url} ({type(exc).__name__}); "
+                    "falling back to model-only research"
+                )
+                fallback = await self.get_llm("default", "llm").invoke(prompt)
+                news = (
+                    "[News search unavailable; background from model knowledge only]\n"
+                    + (fallback or "")
+                )
+        elif researcher.startswith("smart-searcher"):
+            model_name = researcher.removeprefix("smart-searcher/")
+            searcher = SmartSearcher(
+                model=model_name,
+                temperature=0,
+                num_searches_to_run=2,
+                num_sites_per_search=10,
+                use_advanced_filters=False,
+            )
+            news = await searcher.invoke(prompt)
+        elif not researcher or researcher == "None" or researcher == "no_research":
+            news = ""
+        else:
+            news = await self.get_llm("researcher", "llm").invoke(prompt)
+        return news
+
+    async def _targeted_web_research(self, question: MetaculusQuestion) -> str:
+        """Look up where the deciding number or fact stands today.
+
+        News summaries often miss it: on the French drought-restrictions question
+        (post 46467) the forecaster wrote "the count on November 12 is not given"
+        and guessed the starting point. A failure here must never cost the question.
+        """
+        model = os.getenv("WEB_RESEARCH_MODEL") or "openrouter/perplexity/sonar"
+        if model.lower() in ("none", "off"):
+            return ""
+        prompt = clean_indents(
+            f"""
+            You are a research assistant to a superforecaster. Today is {datetime.now().strftime("%Y-%m-%d")}.
+            Search the web and report facts only. Do not forecast and do not give probabilities.
+
+            Question: {question.question_text}
+
+            Resolution criteria:
+            {question.resolution_criteria}
+
+            {question.fine_print}
+
+            Report, each item with its date and source:
+            1. The latest published value or status of exactly the thing this question resolves on, taken from the resolution source named above if there is one. If you cannot find it, say so plainly; never estimate it.
+            2. Its recent history: the values or events of the last weeks or months, so the trend and the usual size of changes are visible.
+            3. Scheduled events, releases or deadlines before the question closes that will decide it.
+            4. How similar situations turned out in the past (base rates), with numbers.
+            """
+        )
+        try:
+            llm = GeneralLlm(model=model, temperature=0, timeout=90, allowed_tries=2)
+            return (await llm.invoke(prompt) or "").strip()
+        except Exception as exc:
+            logger.warning(
+                f"Targeted web research failed for {question.page_url} ({type(exc).__name__}); "
+                "continuing with news only"
+            )
+            return ""
 
     ##################################### BINARY QUESTIONS #####################################
 
