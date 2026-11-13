@@ -10,6 +10,8 @@ import dotenv
 
 # Runtime helpers (env validation, banners, dependency-warning suppression).
 from bot_helpers import (
+    openrouter_credit_left,
+    predictions_for_credit,
     check_environment,
     print_run_summary_banner,
     print_startup_banner,
@@ -302,7 +304,10 @@ class SummerTemplateBot2026(ForecastBot):
             (b) The status quo outcome if nothing changed.
             (c) A brief description of a scenario that results in a No outcome.
             (d) A brief description of a scenario that results in a Yes outcome.
+            (e) The base rate: how often similar events happened in comparable time windows, using the numbers in the research where it gives them.
+            (f) What experts and prediction markets expect, if the research says.
 
+            Read the resolution criteria word for word. Check the exact threshold, date and resolution source against the current status in the research before you choose a number.
             You write your rationale remembering that good forecasters put extra weight on the status quo outcome since the world changes slowly most of the time.
             {self._get_conditional_disclaimer_if_necessary(question)}
 
@@ -365,7 +370,9 @@ class SummerTemplateBot2026(ForecastBot):
             (a) The time left until the outcome to the question is known.
             (b) The status quo outcome if nothing changed.
             (c) A description of an scenario that results in an unexpected outcome.
+            (d) What experts and prediction markets expect, if the research says.
 
+            Read the resolution criteria word for word and check the option boundaries against the current status in the research.
             {self._get_conditional_disclaimer_if_necessary(question)}
             You write your rationale remembering that (1) good forecasters put extra weight on the status quo outcome since the world changes slowly most of the time, and (2) good forecasters leave some moderate probability on most options to account for unexpected outcomes.
 
@@ -775,9 +782,13 @@ if __name__ == "__main__":
     # Configure the bot. The `llms=` block below is commented out to use
     # whichever default models forecasting-tools picks based on your env vars;
     # uncomment and edit to pin specific models.
+    # The Metaculus credit has to last the season: five forecasters while there
+    # is room, fewer when the key runs low, so the bot never stops mid-tournament.
+    predictions = predictions_for_credit(openrouter_credit_left())
+    logger.info(f"Forecasters per question this pass: {predictions}")
     template_bot = SummerTemplateBot2026(
         research_reports_per_question=1,
-        predictions_per_research_report=5,
+        predictions_per_research_report=predictions,
         use_research_summary_to_forecast=False,
         publish_reports_to_metaculus=publish_to_metaculus,
         folder_to_save_reports_to=None,

@@ -147,3 +147,43 @@ def print_run_summary_banner(
 
     print(banner)
     print()
+
+
+def openrouter_credit_left() -> float | None:
+    """Dollars left on the OpenRouter key, or None when it cannot be read."""
+    import os
+
+    import httpx
+
+    key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        data = httpx.get(
+            "https://openrouter.ai/api/v1/key",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=20,
+        ).raise_for_status().json()["data"]
+        left = data.get("limit_remaining")
+        return float(left) if left is not None else None
+    except Exception:
+        return None
+
+
+def predictions_for_credit(credit_left: float | None) -> int:
+    """How many forecasters to run per question for the credit that is left.
+
+    The forecasters are most of the cost of a question (roughly $0.05 each). The
+    median of three is nearly as stable as the median of five, and one forecast
+    is still far better than a missed question.
+    """
+    import os
+
+    override = os.getenv("PREDICTIONS_PER_QUESTION")
+    if override and override.isdigit() and int(override) > 0:
+        return int(override)
+    if credit_left is None or credit_left >= 30:
+        return 5
+    if credit_left >= 8:
+        return 3
+    return 1
