@@ -137,6 +137,12 @@ class SummerTemplateBot2026(ForecastBot):
     )
     _concurrency_limiter = asyncio.Semaphore(_max_concurrent_questions)
     _structure_output_validation_samples = 2
+    _web_research_candidates = [
+        "openrouter/perplexity/sonar",
+        "openrouter/perplexity/sonar-pro",
+        "openrouter/openai/gpt-5-mini:online",
+        "openrouter/anthropic/claude-sonnet-5.5:online",
+    ]
 
     ##################################### RESEARCH #####################################
 
@@ -222,9 +228,13 @@ class SummerTemplateBot2026(ForecastBot):
         (post 46467) the forecaster wrote "the count on November 12 is not given"
         and guessed the starting point. A failure here must never cost the question.
         """
-        model = os.getenv("WEB_RESEARCH_MODEL") or "openrouter/perplexity/sonar"
-        if model.lower() in ("none", "off"):
+        configured = os.getenv("WEB_RESEARCH_MODEL") or ""
+        if configured.lower() in ("none", "off"):
             return ""
+        # The Metaculus-funded OpenRouter key does not serve every model (Sonar
+        # answered NotFound), so try candidates in order and remember the winner.
+        # ":online" is OpenRouter's web-search plugin on a model the key does serve.
+        candidates = [configured] if configured else list(self._web_research_candidates)
         prompt = clean_indents(
             f"""
             You are a research assistant to a superforecaster. Today is {datetime.now().strftime("%Y-%m-%d")}.
@@ -244,15 +254,22 @@ class SummerTemplateBot2026(ForecastBot):
             4. How similar situations turned out in the past (base rates), with numbers.
             """
         )
-        try:
-            llm = GeneralLlm(model=model, temperature=0, timeout=90, allowed_tries=2)
-            return (await llm.invoke(prompt) or "").strip()
-        except Exception as exc:
-            logger.warning(
-                f"Targeted web research failed for {question.page_url} ({type(exc).__name__}); "
-                "continuing with news only"
-            )
-            return ""
+        for model in candidates:
+            try:
+                llm = GeneralLlm(model=model, timeout=90, allowed_tries=1)
+                text = (await llm.invoke(prompt) or "").strip()
+            except Exception as exc:
+                logger.warning(
+                    f"Targeted web research with {model} failed for {question.page_url} "
+                    f"({type(exc).__name__}: {str(exc)[:160]})"
+                )
+                continue
+            if text:
+                if not configured:
+                    type(self)._web_research_candidates = [model]
+                return text
+        logger.warning(f"No targeted web research for {question.page_url}; continuing with news only")
+        return ""
 
     ##################################### BINARY QUESTIONS #####################################
 
@@ -730,12 +747,27 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["tournament", "metaculus_cup", "test_questions"],
+        choices=["tournament", "metaculus_cup", "test_questions", "probe_research"],
         default="tournament",
         help="What to forecast on (default: tournament)",
     )
     args = parser.parse_args()
-    run_mode: Literal["tournament", "metaculus_cup", "test_questions"] = args.mode
+    run_mode: Literal["tournament", "metaculus_cup", "test_questions", "probe_research"] = args.mode
+
+    if run_mode == "probe_research":
+        # One cheap call, nothing published: shows which search model this key serves.
+        from types import SimpleNamespace
+
+        probe_question = SimpleNamespace(
+            question_text="What will the US unemployment rate (U-3) be in the next BLS release?",
+            resolution_criteria="Resolves to the headline rate in the next BLS Employment Situation report.",
+            fine_print="",
+            page_url="probe",
+        )
+        probe_bot = SummerTemplateBot2026(publish_reports_to_metaculus=False)
+        print(asyncio.run(probe_bot._targeted_web_research(probe_question))[:1500] or "NO RESULT")
+        print("Working model:", SummerTemplateBot2026._web_research_candidates)
+        raise SystemExit(0)
 
     check_environment(strict=True)
     publish_to_metaculus = True
