@@ -138,10 +138,9 @@ class SummerTemplateBot2026(ForecastBot):
     _concurrency_limiter = asyncio.Semaphore(_max_concurrent_questions)
     _structure_output_validation_samples = 2
     _web_research_candidates = [
-        "openrouter/perplexity/sonar",
-        "openrouter/perplexity/sonar-pro",
-        "openrouter/openai/gpt-5-mini:online",
+        "openrouter/openai/gpt-5-mini:online",  # verified on this key 2026-11-13
         "openrouter/anthropic/claude-sonnet-5.5:online",
+        "openrouter/perplexity/sonar",  # not served by the Metaculus-funded key today
     ]
 
     ##################################### RESEARCH #####################################
