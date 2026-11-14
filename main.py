@@ -253,6 +253,7 @@ class SummerTemplateBot2026(ForecastBot):
             2. Its recent history: the values or events of the last weeks or months, so the trend and the usual size of changes are visible.
             3. Scheduled events, releases or deadlines before the question closes that will decide it.
             4. How similar situations turned out in the past (base rates), with numbers.
+            5. For an election, contest, award or any choice among several candidates: who is favoured and by how much according to polls, expert or jury rankings and past results, for every serious candidate and not only the one in the question. If you find nothing on this, say so plainly.
             """
         )
         for model in candidates:
@@ -308,7 +309,7 @@ class SummerTemplateBot2026(ForecastBot):
             (f) What experts and prediction markets expect, if the research says.
 
             Read the resolution criteria word for word. Check the exact threshold, date and resolution source against the current status in the research before you choose a number.
-            You write your rationale remembering that good forecasters put extra weight on the status quo outcome since the world changes slowly most of the time.
+            You write your rationale remembering that good forecasters put extra weight on the status quo outcome since the world changes slowly most of the time. The status quo includes announced schedules and processes already in motion: if an institution has said a step will happen on a date, that step happening is the status quo and a delay is the surprise.
             {self._get_conditional_disclaimer_if_necessary(question)}
 
             The last thing you write is your final answer as: "Probability: ZZ%", 0-100
@@ -373,6 +374,7 @@ class SummerTemplateBot2026(ForecastBot):
             (d) What experts and prediction markets expect, if the research says.
 
             Read the resolution criteria word for word and check the option boundaries against the current status in the research.
+            The status quo includes announced schedules and processes already in motion: if an institution has said a step will happen on a date, that step happening is the status quo and a delay is the surprise.
             {self._get_conditional_disclaimer_if_necessary(question)}
             You write your rationale remembering that (1) good forecasters put extra weight on the status quo outcome since the world changes slowly most of the time, and (2) good forecasters leave some moderate probability on most options to account for unexpected outcomes.
 
