@@ -15,6 +15,9 @@ phone and cannot review code. Explain results in plain Croatian, short, with num
 - `review_bot.yaml` scores resolved questions weekly. It only reads; it costs nothing.
 - The old "Horizon" pipeline (`horizon_cloud.yaml`, `horizon_inventory.yaml`,
   `main_with_no_framework.py`, `review_recovery.py`) is paused. Leave it alone.
+  Its three workflow files (`horizon_cloud`, `horizon_inventory`,
+  `horizon_diagnostics`) start themselves when they are edited on `main`, and
+  they use the paid key. Do not touch those files.
 
 ## Why the score is what it is
 
@@ -30,8 +33,9 @@ retune the current bot until the weekly review shows resolved questions it forec
    what happens if the new code throws: a question must still get a forecast. New
    research or model calls go inside `try/except` with a fallback, like
    `_targeted_web_research`.
-2. Money. The OpenRouter key is funded by Metaculus and is finite (about $59 left on
-   14 November). `Test Bot` in its default mode forecasts ten test questions and
+2. Money. The OpenRouter key is funded by Metaculus and is finite ($56.85 left on
+   15 November, from the supervisor log). Read the current number there; never
+   quote this one. `Test Bot` in its default mode forecasts ten test questions and
    costs real credit: run it only when a change cannot be checked another way.
    `Test Bot` with `mode=probe_research` is one cheap call. Never run `python main.py`
    locally or add a workflow trigger on `push`.
@@ -45,6 +49,17 @@ retune the current bot until the weekly review shows resolved questions it forec
    changes bot behaviour, start a new watch run
    (`gh workflow run run_bot_on_tournament.yaml -f watch_minutes=345`) and cancel the
    old one, because a run keeps the code it started with for six hours.
+
+7. This repo is a public fork of `Metaculus/metac-bot-template`. Two consequences:
+   - Anything committed is visible to everyone. No keys, no personal data.
+   - A pull request must target `d0000d/horizon-forecasting`, never the Metaculus
+     repo. `gh pr create` picks the Metaculus repo by default: always pass
+     `--repo d0000d/horizon-forecasting`, and check the base before you submit.
+8. Changes to `main` need Domagoj's yes. Push a branch and open a pull request,
+   then tell him in Croatian what it changes and what merging it will cost.
+9. `gh issue list` and `gh pr list` fail in some assistant sessions (GraphQL is
+   blocked). Use `gh api repos/d0000d/horizon-forecasting/issues` or `.../pulls`.
+   `gh run list` and `gh run view <id> --log` work.
 
 ## How to answer "kako stojimo?"
 
